@@ -1654,6 +1654,215 @@ def _extract_xlsx_comments(path):
         return _extract_xlsx_comments_openpyxl(path)
 
 
+_CONVERTED_XLS_MAX_AGE_DAYS = 60
+# Троттлинг GC (ревью v2.5.2): проход каталога может дорожать на сетевой шаре —
+# не чаще одного раза в 6 часов по умолчанию; force=True выполняет всегда (скрипт-тесты)
+_CONVERTED_XLS_GC_MIN_INTERVAL_SEC = 6 * 3600
+_XLS_GC_LAST_COMPLETED = 0.0
+
+
+def _gc_converted_xls_cache(max_age_days=_CONVERTED_XLS_MAX_AGE_DAYS, force=False):
+    """Возрастной GC кэша конверсий .xls (.cache/converted_xls).
+
+    Удаляет кэш-конверсии старше max_age_days (включая осиротевшие обрывки .tmp_*,
+    которые старше 1 дня — обрыв конверсии это мусор сразу после неудачи, ждать
+    60 дней незачем). Троттлинг: без force выполняется не чаще чем раз в
+    _CONVERTED_XLS_GC_MIN_INTERVAL_SEC (измеряется от последнего завершённого
+    прохода); force=True всегда проходит. Гонки с параллельной конверсией
+    безопасны: свежие (по mtime) конверсии удалены не могут быть; микроскопный
+    остаточный TOCTOU между getmtime и os.remove теоретически возможен и даёт
+    только одну лишнюю пере-конверсию, осиротевшие remove-гонки ловятся except'ом.
+    Никогда не бросает; сводка печатается только при N>0; нет папки — тихий return.
+    """
+    global _XLS_GC_LAST_COMPLETED
+    try:
+        now_mono = time.monotonic()
+        if not force and (now_mono - _XLS_GC_LAST_COMPLETED) < _CONVERTED_XLS_GC_MIN_INTERVAL_SEC:
+            return
+        _XLS_GC_LAST_COMPLETED = now_mono
+        cache_dir = os.path.join(get_base_path(), ".cache", "converted_xls")
+        if not os.path.isdir(cache_dir):
+            return
+        cutoff = time.time() - max_age_days * 86400
+        removed = 0
+        for name in os.listdir(cache_dir):
+            file_path = os.path.join(cache_dir, name)
+            try:
+                if not os.path.isfile(file_path):
+                    continue
+                mtime = os.path.getmtime(file_path)
+                if name.startswith(".tmp_"):
+                    stale = (time.time() - mtime) >= 86400
+                else:
+                    stale = mtime < cutoff
+                if not stale:
+                    continue
+                os.remove(file_path)
+                removed += 1
+            except FileNotFoundError:
+                pass
+            except OSError as rm_err:
+                print(f"GC converted_xls: не удалось удалить {name}: {rm_err}")
+        if removed:
+            print(f"GC converted_xls: удалено {removed} устаревших кэш-конверсий (старше {max_age_days} дн.)")
+    except Exception as gc_err:
+        print(f"GC converted_xls: сбой очистки кэша: {gc_err}")
+
+
+def _convert_xls_batch(paths):
+    """Пакетная конвертация .xls → .xlsx: ОДИН Excel COM-инстанс на весь список.
+
+    Префильтр без COM (OLE2-сигнатура + mtime-кэш-хит) отсеивает всё, что можно,
+    не запуская Excel; Excel стартует только если есть хотя бы один промах кэша.
+    Сбой одного файла даёт None только этому файлу (соседи продолжаются);
+    сбой общего COM-старта даёт прежнюю диагностику каждому промаху.
+    Кэш-ключ содержит md5 полного пути (коллизии одинаковых имён из разных папок);
+    свежий кэш (mtime кэша >= mtime оригинала) переиспользуется без запуска Excel.
+    COM-инициализация самодостаточна (парный CoInitialize/CoUninitialize) —
+    вложенность в поток load_files_bg легальна (прецедент safe_read_old_word_file).
+    Возвращает dict {path: cache_path или None}; ключи — ровно входные пути;
+    в конце (после finally) выполняется троттлингованный возрастной GC кэша
+    конверсий (не чаще раза в 6 ч, см. _gc_converted_xls_cache). Никогда не бросает.
+    """
+    result = {file_path: None for file_path in paths}
+    if not paths:
+        return result
+    OLE2_SIG = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+    resolved = set()
+    try:
+        # --- ДЛЯ КАЖДОГО ФАЙЛА: префильтр БЕЗ COM (прежние тексты диагностики) ---
+        misses = []
+        for file_path in paths:
+            try:
+                # Не-OLE2 файл под видом .xls: Excel COM умеет «восстанавливать» произвольные
+                # бинарники в лист с мусором. Настоящий .xls (BIFF) всегда лежит в OLE2-контейнере —
+                # проверяем сигнатуру ДО COM, иначе мусор проиндексируется вместо честного «Ошибка…»
+                try:
+                    with open(file_path, "rb") as f:
+                        if f.read(8) != OLE2_SIG:
+                            print(f"Файл {os.path.basename(file_path)} не является настоящим .xls (нет OLE2-сигнатуры) — конверсия отменена")
+                            resolved.add(file_path)
+                            continue
+                except OSError as sig_err:
+                    print(f"Не удалось прочитать голову {os.path.basename(file_path)} для проверки .xls: {sig_err}")
+                    resolved.add(file_path)
+                    continue
+
+                cache_dir = os.path.join(get_base_path(), ".cache", "converted_xls")
+                abs_path = os.path.abspath(file_path)
+                cache_key = hashlib.md5(abs_path.encode("utf-8", "ignore")).hexdigest()[:8]
+                cache_name = f"{_norm_filename(os.path.splitext(os.path.basename(file_path))[0])}_{cache_key}.xlsx"
+                cache_path = os.path.join(cache_dir, cache_name)
+
+                if os.path.exists(cache_path):
+                    try:
+                        if os.path.getmtime(cache_path) >= os.path.getmtime(file_path):
+                            # LRU-сдвиг mtime («возраст кэша от последнего использования»): иначе
+                            # GC (60 дн.) мог удалить валидный хит ещё ДО чтения его caller'ом
+                            # (кэш-хит-критерий и GC-критерий не связаны — ревью v2.5.2)
+                            try:
+                                os.utime(cache_path, None)
+                            except OSError:
+                                pass
+                            result[file_path] = cache_path
+                            resolved.add(file_path)
+                            continue
+                    except OSError:
+                        pass
+                misses.append((file_path, cache_dir, cache_path))
+            except Exception as pre_err:
+                # Не-сигнатурный сбой одного файла не отменяет весь пакет
+                print(f"Ошибка подготовки конвертации {os.path.basename(str(file_path))} (.xls → .xlsx): {pre_err}")
+                resolved.add(file_path)
+
+        # --- ПРОМАХИ ОДНОЙ COM-СЕССИИ (Excel не запускается вовсе, если промахов нет) ---
+        if misses:
+            # Подготовка каталога кэша — отдельная ветка с прежней диагностикой
+            # «Ошибка подготовки…» (не смешивается с COM-сообщениями; паритет одиночного вызова)
+            try:
+                os.makedirs(misses[0][1], exist_ok=True)
+            except Exception as prep_err:
+                for m_path, _m_dir, _m_cache in misses:
+                    print(f"Ошибка подготовки конвертации {os.path.basename(m_path)} (.xls → .xlsx): {prep_err}")
+                resolved.update(m_path for m_path, _m_dir, _m_cache in misses)
+                misses = []
+        if misses:
+            excel = None
+            workbooks = None
+            temp_cleanup = []
+            pythoncom.CoInitialize()
+            try:
+                try:
+                    excel = win32com.client.DispatchEx("Excel.Application")
+                    excel.Visible = False
+                    excel.DisplayAlerts = 0
+                    try:
+                        excel.AutomationSecurity = 3  # msoAutomationSecurityForceDisable: без макро-диалогов
+                    except Exception:
+                        pass
+                    workbooks = excel.Workbooks
+                except Exception as com_err:
+                    # Сбой общего COM-старта: каждый оставшийся промах получает прежнюю
+                    # диагностику одиночного вызова; уже готовые кэш-хиты не затронуты
+                    for m_path, _m_dir, _m_cache in misses:
+                        print(f"Ошибка конвертации {os.path.basename(m_path)} (.xls → .xlsx): {com_err}")
+                    resolved.update(m_path for m_path, _m_dir, _m_cache in misses)
+                if workbooks is not None:
+                    for file_path, cache_dir, cache_path in misses:
+                        unique_id = uuid.uuid4().hex
+                        temp_input = os.path.normpath(os.path.join(tempfile.gettempdir(), f"temp_in_{unique_id}.xls"))
+                        # Промежуточное имя в том же каталоге (атомарный os.replace), с расширением .xlsx для Excel
+                        cache_tmp = os.path.join(cache_dir, f".tmp_{unique_id}_{os.path.basename(cache_path)}")
+                        temp_cleanup.append(temp_input)
+                        temp_cleanup.append(cache_tmp)
+                        wb = None
+                        try:
+                            try:
+                                shutil.copy2(file_path, temp_input)
+                            except Exception as copy_err:
+                                # Прежняя отдельная диагностика сбоя копирования (паритет
+                                # с одиночным вызовом; не смешивается с «Ошибка конвертации»)
+                                print(f"Не удалось скопировать {os.path.basename(file_path)} во временную папку для конвертации: {copy_err}")
+                                continue
+                            wb = workbooks.Open(temp_input, 0, True)  # (FileName, UpdateLinks=0, ReadOnly=True)
+                            wb.SaveAs(cache_tmp, 51)  # 51 = xlOpenXMLWorkbook (.xlsx)
+                            wb.Close(False)
+                            wb = None
+                            os.replace(cache_tmp, cache_path)  # атомарная подмена кэша
+                            result[file_path] = cache_path
+                        except Exception as com_err:
+                            result[file_path] = None
+                            print(f"Ошибка конвертации {os.path.basename(file_path)} (.xls → .xlsx): {com_err}")
+                        finally:
+                            if wb is not None:
+                                try:
+                                    wb.Close(False)
+                                except Exception:
+                                    pass
+                            resolved.add(file_path)
+            finally:
+                if excel is not None:
+                    try:
+                        excel.Quit()
+                    except Exception:
+                        pass
+                pythoncom.CoUninitialize()
+                for p in temp_cleanup:
+                    try:
+                        if os.path.exists(p):
+                            os.remove(p)
+                    except Exception as ce:
+                        print(f"Не удалось удалить временный файл {p}: {ce}")
+    except Exception as e:
+        # Не-COM сбой подготовки: диагностика только тем, кто ещё без результата
+        for path_key in result:
+            if path_key not in resolved:
+                print(f"Ошибка подготовки конвертации {os.path.basename(str(path_key))} (.xls → .xlsx): {e}")
+    finally:
+        _gc_converted_xls_cache()
+    return result
+
+
 def _get_or_convert_xls(file_path):
     """Конвертирует бинарный .xls в .xlsx через Excel COM с mtime-кэшем (.cache/converted_xls).
 
@@ -1662,92 +1871,11 @@ def _get_or_convert_xls(file_path):
     Возвращает путь к кэш-конверсии или None при сбое (Excel не установлен, пароль,
     битый/не-OLE2 файл). COM-инициализация самодостаточна (парный CoInitialize/
     CoUninitialize) — вложенность в поток load_files_bg легальна (прецедент
-    safe_read_old_word_file).
+    safe_read_old_word_file). v2.5.2: тонкий wrapper над _convert_xls_batch
+    (один кернер на одиночный и пакетный вызовы — нет дрейфа сообщений;
+    одиночный вызов в придачу выполняет троттлингованный возрастной GC кэша).
     """
-    try:
-        # Не-OLE2 файл под видом .xls: Excel COM умеет «восстанавливать» произвольные
-        # бинарники в лист с мусором. Настоящий .xls (BIFF) всегда лежит в OLE2-контейнере —
-        # проверяем сигнатуру ДО COM, иначе мусор проиндексируется вместо честного «Ошибка…»
-        try:
-            with open(file_path, "rb") as f:
-                if f.read(8) != b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1":
-                    print(f"Файл {os.path.basename(file_path)} не является настоящим .xls (нет OLE2-сигнатуры) — конверсия отменена")
-                    return None
-        except OSError as sig_err:
-            print(f"Не удалось прочитать голову {os.path.basename(file_path)} для проверки .xls: {sig_err}")
-            return None
-
-        cache_dir = os.path.join(get_base_path(), ".cache", "converted_xls")
-        abs_path = os.path.abspath(file_path)
-        cache_key = hashlib.md5(abs_path.encode("utf-8", "ignore")).hexdigest()[:8]
-        cache_name = f"{_norm_filename(os.path.splitext(os.path.basename(file_path))[0])}_{cache_key}.xlsx"
-        cache_path = os.path.join(cache_dir, cache_name)
-
-        if os.path.exists(cache_path):
-            try:
-                if os.path.getmtime(cache_path) >= os.path.getmtime(file_path):
-                    return cache_path
-            except OSError:
-                pass
-
-        os.makedirs(cache_dir, exist_ok=True)
-        unique_id = uuid.uuid4().hex
-        temp_input = os.path.normpath(os.path.join(tempfile.gettempdir(), f"temp_in_{unique_id}.xls"))
-        # Промежуточное имя в том же каталоге (атомарный os.replace), с расширением .xlsx для Excel
-        cache_tmp = os.path.join(cache_dir, f".tmp_{unique_id}_{cache_name}")
-
-        try:
-            shutil.copy2(file_path, temp_input)
-        except Exception as copy_err:
-            print(f"Не удалось скопировать {os.path.basename(file_path)} во временную папку для конвертации: {copy_err}")
-            try:
-                if os.path.exists(temp_input):
-                    os.remove(temp_input)
-            except Exception:
-                pass
-            return None
-
-        excel = None
-        wb = None
-        pythoncom.CoInitialize()
-        try:
-            excel = win32com.client.DispatchEx("Excel.Application")
-            excel.Visible = False
-            excel.DisplayAlerts = 0
-            try:
-                excel.AutomationSecurity = 3  # msoAutomationSecurityForceDisable: без макро-диалогов
-            except Exception:
-                pass
-            wb = excel.Workbooks.Open(temp_input, 0, True)  # (FileName, UpdateLinks=0, ReadOnly=True)
-            wb.SaveAs(cache_tmp, 51)  # 51 = xlOpenXMLWorkbook (.xlsx)
-            wb.Close(False)
-            wb = None
-            os.replace(cache_tmp, cache_path)  # атомарная подмена кэша
-            return cache_path
-        except Exception as com_err:
-            print(f"Ошибка конвертации {os.path.basename(file_path)} (.xls → .xlsx): {com_err}")
-            return None
-        finally:
-            if wb is not None:
-                try:
-                    wb.Close(False)
-                except Exception:
-                    pass
-            if excel is not None:
-                try:
-                    excel.Quit()
-                except Exception:
-                    pass
-            pythoncom.CoUninitialize()
-            for p in (temp_input, cache_tmp):
-                try:
-                    if os.path.exists(p):
-                        os.remove(p)
-                except Exception as ce:
-                    print(f"Не удалось удалить временный файл {p}: {ce}")
-    except Exception as e:
-        print(f"Ошибка подготовки конвертации {os.path.basename(file_path)} (.xls → .xlsx): {e}")
-        return None
+    return _convert_xls_batch([file_path]).get(file_path)
 
 
 def extract_text_from_pdf(filepath):
@@ -6626,10 +6754,13 @@ def save_global_settings(data):
 # ==================== GUI ПРИЛОЖЕНИЕ ====================
 
 APP_NAME = "ИИ-Агент СМК"
-APP_VERSION = "v2.5.1 Enterprise"
+APP_VERSION = "v2.5.2 Enterprise"
 APP_DEVELOPER = "Плаксунов В.Б."
 APP_PHONE = "2166"
 APP_DESCRIPTION = (
+    "2.5.2 - Скорость и порядок: пачка .xls прикреплений конвертируется ОДНИМ запуском Excel "
+    "(экономия 1-3 с на каждом файле); кэш конверсий .xls чистится автоматически — старше 60 дней, "
+    "обрывки конверсий сразу; сообщения о сбоях и сам кэш-механизм не изменились.\n"
     "2.5.1 - Вкладка XWiki: ползунки \"Глубина паучьей догрузки\" и \"Лимит Vision-картинок "
     "docx\" расположены рядом двумя блоками (было друг над другом); постоянные серые абзацы "
     "пояснений убраны — теперь пояснение всплывает при наведении на заголовок со значком \"i\" "
@@ -6638,9 +6769,6 @@ APP_DESCRIPTION = (
     "попадают в базу знаний и чат; лимит картинок на файл за проход (ползунок на вкладке "
     "XWiki, 0 = выключено), кэш распознавания, общий бюджет 60 вызовов/10 минут, защита "
     "от каскада; большие Word >100k символов идут без OCR.\n"
-    "2.4.2 - Кнопка \"Управление памятью\" (админ): визуальное редактирование Memory/agent_memory.md "
-    "с мгновенной переиндексацией, добавление фактов с автодатой, страховочные копии; общая "
-    "переиндексация вынесена в reindex_memory_file (инструменты памяти переведены на хелпер).\n"
     "Полная история изменений: docs/DECISIONS.md.\n"
     "\n"
     "Корпоративный ИИ-ассистент для Системы Менеджмента Качества (СМК).\n"
@@ -8683,6 +8811,13 @@ class App(ctk.CTk):
                 if any(os.path.splitext(fp)[1].lower() in ('.pdf', '.jpg', '.jpeg', '.png', '.bmp', '.docx') for fp in file_paths):
                     _vision_circuit_reset()
 
+                # v2.5.2: батч-конвертация всех .xls ОДНИМ Excel-инстансом ДО цикла обработки
+                # (пустой список → {} без запуска Excel; каждый .xls в цикле берёт свой путь из dict)
+                xls_converted = _convert_xls_batch([
+                    fp for fp in file_paths
+                    if os.path.splitext(fp)[1].lower() == '.xls'
+                ])
+
                 # 3. ГЛАВНЫЙ ЦИКЛ ОБРАБОТКИ
                 for file_path in file_paths:
                     try:
@@ -8734,7 +8869,7 @@ class App(ctk.CTk):
                             working_path = file_path
                             converted = None
                             if ext == '.xls':
-                                converted = _get_or_convert_xls(file_path)
+                                converted = xls_converted.get(file_path)  # v2.5.2: уже конвертировано батчем
                                 if converted:
                                     working_path = converted
                                 else:
@@ -8891,6 +9026,9 @@ class App(ctk.CTk):
                     except Exception as e:
                         _warn_attach_skip(f"Ошибка чтения {os.path.basename(file_path)}: {e}")
             finally:
+                # v2.5.2: возрастной GC кэша конверсий .xls — при любом исходе цикла
+                # (троттлинг расчёт с 6 ч; хелпер никогда не бросает)
+                _gc_converted_xls_cache()
                 pythoncom.CoUninitialize() # Очистка COM-потока
                 self.after(0, self.refresh_attached_files_ui) # Обновление интерфейса
 
