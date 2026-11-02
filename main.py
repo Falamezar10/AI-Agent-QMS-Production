@@ -78,6 +78,46 @@ GRAPH_DEDUP_THRESHOLD = 0.30
 ctk.set_appearance_mode("System")
 ctk.set_default_color_theme("blue")
 
+# v2.5.3: единая палитра интерфейса (кортеж = (светлая тема, тёмная тема))
+_UI_COLORS = {
+    "accent":         ("#3a7ebf", "#1f538d"),
+    "accent_hover":   ("#325a82", "#144770"),
+    "success":        "#2E7D32",
+    "success_hover":  "#1B5E20",
+    "danger":         ("#C62828", "#B71C1C"),
+    "danger_hover":   ("#A52323", "#9A1919"),
+    "steel":          ("#455A64", "#263238"),
+    "steel_hover":    ("#37474F", "#1A2228"),
+    "muted_btn":      ("gray30", "gray32"),
+    "muted_btn_hover": ("gray22", "gray24"),
+    "chip_bg":        ("gray88", "gray25"),
+    "chip_hover":     ("gray78", "gray33"),
+    "chip_text":      ("gray12", "gray92"),
+    "info_text":      ("#1f538d", "#8ab4f8"),
+    "link":           ("#1565C0", "#5AA7FF"),
+    "heading":        ("#1565C0", "#4DA3FF"),
+    "system_text":    ("gray42", "gray60"),
+    "tool_call_text": ("gray38", "gray68"),
+    "hr_text":        ("gray68", "gray40"),
+    "badge_user_bg":  "#1F6AA5",
+    "badge_agent_bg": ("gray33", "gray28"),
+    "error_text":     ("#C62828", "#E06C75"),
+    "warn_text":      ("#946200", "#E5C07B"),
+    "ok_text":        ("#1E7A38", "#98c379"),
+    "separator":      ("gray80", "gray35"),
+}
+
+
+def _ui_color(value):
+    """Резолв кортежа (светлый, тёмный) в одинарный цвет под текущую тему (для Tk-тегов)."""
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        try:
+            dark = ctk.AppearanceModeTracker.get_mode() == 1
+        except Exception:
+            dark = False
+        return value[1] if dark else value[0]
+    return value
+
 # Загружаем переменные окружения ДО инициализации эмбеддингов
 load_dotenv()
 wikipedia.set_lang("ru")  # Ищем на русском
@@ -6754,10 +6794,14 @@ def save_global_settings(data):
 # ==================== GUI ПРИЛОЖЕНИЕ ====================
 
 APP_NAME = "ИИ-Агент СМК"
-APP_VERSION = "v2.5.2 Enterprise"
+APP_VERSION = "v2.5.3 Enterprise"
 APP_DEVELOPER = "Плаксунов В.Б."
 APP_PHONE = "2166"
 APP_DESCRIPTION = (
+    "2.5.3 - Обновлённый внешний вид: единая палитра интерфейса во вкладках и окнах, аккуратные плашки "
+    "сообщений чата, системные сообщения выделены приглушённым курсивом, единый цвет заголовков и ссылок, "
+    "подсказки при наведении на кнопки ввода, адаптивные чипы вложений, иконка окна; одинаково хорошо "
+    "читается в светлой и тёмной теме Windows; логика агента, синхронизации и инструментов не менялась.\n"
     "2.5.2 - Скорость и порядок: пачка .xls прикреплений конвертируется ОДНИМ запуском Excel "
     "(экономия 1-3 с на каждом файле); кэш конверсий .xls чистится автоматически — старше 60 дней, "
     "обрывки конверсий сразу; сообщения о сбоях и сам кэш-механизм не изменились.\n"
@@ -6765,10 +6809,6 @@ APP_DESCRIPTION = (
     "docx\" расположены рядом двумя блоками (было друг над другом); постоянные серые абзацы "
     "пояснений убраны — теперь пояснение всплывает при наведении на заголовок со значком \"i\" "
     "или на сам ползунок.\n"
-    "2.5.0 - Vision-распознавание картинок, встроенных в docx: схемы и блок-схемы из Word "
-    "попадают в базу знаний и чат; лимит картинок на файл за проход (ползунок на вкладке "
-    "XWiki, 0 = выключено), кэш распознавания, общий бюджет 60 вызовов/10 минут, защита "
-    "от каскада; большие Word >100k символов идут без OCR.\n"
     "Полная история изменений: docs/DECISIONS.md.\n"
     "\n"
     "Корпоративный ИИ-ассистент для Системы Менеджмента Качества (СМК).\n"
@@ -6992,8 +7032,18 @@ class App(ctk.CTk):
         super().__init__()
         # Логирование настраивается ДО старта daemon-потоков (паук/синхронизация)
         setup_logging()
-        self.title(f"{APP_NAME} | Версия: {APP_VERSION}")
+        self.title(APP_NAME)
         self.geometry("900x650")
+        self.minsize(900, 650)
+        # v2.5.3: иконка окна — из .ico рядом с исходником/запускаемым exe (тихий fallback)
+        _icon_dir = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
+                     else os.path.dirname(os.path.abspath(__file__)))
+        _icon_path = os.path.join(_icon_dir, "agent_icon_3.ico")
+        if os.path.exists(_icon_path):
+            try:
+                self.iconbitmap(_icon_path)
+            except Exception:
+                pass
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
         
@@ -7071,8 +7121,8 @@ class App(ctk.CTk):
             self.sidebar_frame,
             text="💾 Экспорт в Word", 
             command=self.export_chat_to_word,
-            fg_color="#2E7D32",
-            hover_color="#1B5E20"
+            fg_color=_UI_COLORS["success"],
+            hover_color=_UI_COLORS["success_hover"]
         )
         self.export_btn.grid(row=5, column=0, padx=20, pady=10)
 
@@ -7080,8 +7130,8 @@ class App(ctk.CTk):
             self.sidebar_frame,
             text="🔑 Войти как Админ",
             command=self.prompt_auth,
-            fg_color="#455A64",
-            hover_color="#263238"
+            fg_color=_UI_COLORS["steel"],
+            hover_color=_UI_COLORS["steel_hover"]
         )
         self.auth_btn.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="s")
         
@@ -7136,7 +7186,7 @@ class App(ctk.CTk):
         self.status_label.grid(row=11, column=0, padx=20, pady=(5, 15))
 
         # Индикатор прогресса построения графа связей (обновляется фоновым пауком)
-        self.graph_status_label = ctk.CTkLabel(self.sidebar_frame, text="", font=ctk.CTkFont(size=11), text_color="#8ab4f8")
+        self.graph_status_label = ctk.CTkLabel(self.sidebar_frame, text="", font=ctk.CTkFont(size=11), text_color=_UI_COLORS["info_text"])
         self.graph_status_label.grid(row=12, column=0, padx=20, pady=(0, 10), sticky="w")
         
         self.chat_frame = ctk.CTkFrame(self)
@@ -7157,28 +7207,30 @@ class App(ctk.CTk):
         text_widget = self.chat_textbox._textbox
         text_widget.tag_config("hide", elide=True)
         text_widget.tag_config("bold", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"))
-        text_widget.tag_config("h1", font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"), foreground="#FF8C00")
-        text_widget.tag_config("h2", font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), foreground="#00BFFF")
-        text_widget.tag_config("h3", font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"), foreground="#4FC3F7")
-        text_widget.tag_config("h4", font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"), foreground="#64B5F6")
-        text_widget.tag_config("h5", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), foreground="#81C784")
-        text_widget.tag_config("h6", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold", slant="italic"), foreground="#90A4AE")
-        # Убрали фон и цвет текста у таблицы для адаптивности под темы
+        _heading_fg = _ui_color(_UI_COLORS["heading"])
+        text_widget.tag_config("h1", font=ctk.CTkFont(family="Segoe UI", size=22, weight="bold"), foreground=_heading_fg)
+        text_widget.tag_config("h2", font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), foreground=_heading_fg)
+        text_widget.tag_config("h3", font=ctk.CTkFont(family="Segoe UI", size=16, weight="bold"), foreground=_heading_fg)
+        text_widget.tag_config("h4", font=ctk.CTkFont(family="Segoe UI", size=15, weight="bold"), foreground=_heading_fg)
+        text_widget.tag_config("h5", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"), foreground=_heading_fg)
+        text_widget.tag_config("h6", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold", slant="italic"), foreground=_heading_fg)
         text_widget.tag_config("table", font=ctk.CTkFont(family="Consolas", size=13), wrap="none", justify="center")
-        text_widget.tag_config("hr", foreground="#555555")
-        text_widget.tag_config("hyperlink", foreground="#1f538d", underline=True)
+        text_widget.tag_config("hr", foreground=_ui_color(_UI_COLORS["hr_text"]))
+        text_widget.tag_config("hyperlink", foreground=_ui_color(_UI_COLORS["link"]), underline=True)
         text_widget.tag_bind("hyperlink", "<Enter>", lambda e: text_widget.config(cursor="hand2"))
         text_widget.tag_bind("hyperlink", "<Leave>", lambda e: text_widget.config(cursor=""))
         
-        # --- НОВОЕ: Стили бейджей (плашек) для сквозной нумерации ---
-        text_widget.tag_config("msg_id", foreground="#FFD700")
-        text_widget.tag_config("role_user", foreground="#4FC3F7")
-        text_widget.tag_config("role_agent", foreground="#81C784")
-        text_widget.tag_config("normal_text", foreground="#E0E0E0")
-        text_widget.tag_config("badge_user", background="#1F6AA5", foreground="white", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"))
-        text_widget.tag_config("badge_agent", background="#555555", foreground="white", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"))
-        text_widget.tag_config("tool_call", foreground="#888888", font=ctk.CTkFont(family="Consolas", size=13, slant="italic"))
+        # v2.5.3: теги сообщений чата; dead-теги msg_id/role_user/role_agent/normal_text удалены,
+        # добавлен тег system для системных сообщений ([Система: …], [⚠️ …], [⏹ …]);
+        # цвета реактивно перекрашиваются при смене темы Windows (см. _apply_chat_tag_colors)
+        text_widget.tag_config("system", foreground=_ui_color(_UI_COLORS["system_text"]), font=("Segoe UI", 13, "italic"))
+        text_widget.tag_config("badge_user", background=_UI_COLORS["badge_user_bg"], foreground="white", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"))
+        text_widget.tag_config("badge_agent", background=_ui_color(_UI_COLORS["badge_agent_bg"]), foreground="white", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"))
+        text_widget.tag_config("tool_call", foreground=_ui_color(_UI_COLORS["tool_call_text"]), font=ctk.CTkFont(family="Consolas", size=13, slant="italic"))
         text_widget.tag_bind("hyperlink", "<Button-1>", self.on_link_click)
+
+        self._apply_chat_tag_colors()
+        ctk.AppearanceModeTracker.add(self._apply_chat_tag_colors, self)
         
         self.input_frame = ctk.CTkFrame(self.chat_frame)
         self.input_frame.grid(row=1, column=0, padx=10, pady=(5, 10), sticky="ew")
@@ -7220,7 +7272,7 @@ class App(ctk.CTk):
         # [0, 1] Кнопка микрофона (Push-to-Talk) — только для админа
         self.record_btn = ctk.CTkButton(
             buttons_frame, text="🎤", width=40, height=36,
-            fg_color=["#3a7ebf", "#1f538d"]
+            fg_color=_UI_COLORS["accent"], hover_color=_UI_COLORS["accent_hover"]
         )
         self.record_btn.grid(row=0, column=1, padx=2, pady=2)
         self.record_btn.bind('<ButtonPress-1>', self._on_record_start)
@@ -7239,6 +7291,12 @@ class App(ctk.CTk):
             command=self.send_message, font=ctk.CTkFont(size=18)
         )
         self.send_button.grid(row=1, column=1, padx=2, pady=2)
+
+        # v2.5.3: подсказки при наведении на кнопки ввода
+        _hover_tip(self.attach_button, "Прикрепить файлы к сообщению")
+        _hover_tip(self.record_btn, "Запись голоса: удерживайте кнопку (только Админ)")
+        _hover_tip(self.prompt_master_btn, "Промпт-мастер: конструктор запроса")
+        _hover_tip(self.send_button, "Отправить запрос (Enter). Во время ответа агенту кнопка — ⏹ остановить цикл")
 
         # Скрываем кнопку микрофона если не админ
         if getattr(self, "current_role", "guest") != "admin":
@@ -7931,7 +7989,7 @@ class App(ctk.CTk):
 
         btn_del_tpl = ctk.CTkButton(
             top_panel, text="🗑 Удалить", width=90,
-            fg_color="#C62828", hover_color="#B71C1C"
+            fg_color=_UI_COLORS["danger"], hover_color=_UI_COLORS["danger_hover"]
         )
         btn_del_tpl.grid(row=0, column=2, padx=(0, 0))
 
@@ -7999,12 +8057,12 @@ class App(ctk.CTk):
         bottom_panel.grid(row=2, column=0, padx=12, pady=(0, 12), sticky="ew")
         bottom_panel.grid_columnconfigure(0, weight=1)
 
-        error_label = ctk.CTkLabel(bottom_panel, text="", text_color="#FF5252", anchor="w")
+        error_label = ctk.CTkLabel(bottom_panel, text="", text_color=_UI_COLORS["error_text"], anchor="w")
         error_label.grid(row=0, column=0, sticky="ew", padx=4)
 
         btn_send = ctk.CTkButton(
             bottom_panel, text="✅ Отправить в чат", width=180,
-            fg_color="#2E7D32", hover_color="#1B5E20"
+            fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"]
         )
         btn_send.grid(row=1, column=0, pady=(6, 0))
 
@@ -8415,7 +8473,7 @@ class App(ctk.CTk):
             threading.Thread(target=self._real_transcribe_api, args=(filepath,), daemon=True).start()
         else:
             def reset_btn():
-                self.record_btn.configure(fg_color=["#3a7ebf", "#1f538d"], text="🎤", state="normal")
+                self.record_btn.configure(fg_color=_UI_COLORS["accent"], hover_color=_UI_COLORS["accent_hover"], text="🎤", state="normal")
             self.after(0, reset_btn)
             self.append_to_chat("\n⚠️ Ошибка: Аудио не записано (слишком короткое).\n")
 
@@ -8546,11 +8604,11 @@ class App(ctk.CTk):
         current_text = self.input_entry.get("1.0", "end-1c")
         separator = " " if current_text and not current_text.endswith(" ") else ""
         self.input_entry.insert("end", f"{separator}{text.strip()}")
-        self.record_btn.configure(fg_color=["#3a7ebf", "#1f538d"], text="🎤", state="normal")
+        self.record_btn.configure(fg_color=_UI_COLORS["accent"], hover_color=_UI_COLORS["accent_hover"], text="🎤", state="normal")
 
     def _reset_record_button(self):
         """Сброс кнопки микрофона в исходное состояние."""
-        self.record_btn.configure(fg_color=["#3a7ebf", "#1f538d"], text="🎤", state="normal")
+        self.record_btn.configure(fg_color=_UI_COLORS["accent"], hover_color=_UI_COLORS["accent_hover"], text="🎤", state="normal")
 
     def _on_audio_provider_change(self, choice):
         """Реактивное обновление списка моделей при смене провайдера."""
@@ -8705,7 +8763,7 @@ class App(ctk.CTk):
     def highlight_attachments(self):
         """Сканирует чат и делает теги [Вложение: ...] кликабельными."""
         # Настраиваем визуальный стиль ссылки
-        self.chat_textbox.tag_config("attachment_link", foreground="#1f6aa5", underline=True)
+        self.chat_textbox.tag_config("attachment_link", foreground=_ui_color(_UI_COLORS["link"]), underline=True)
         # Меняем курсор при наведении (обращаемся к базовому виджету tk.Text)
         self.chat_textbox.tag_bind("attachment_link", "<Enter>", lambda e: self.chat_textbox._textbox.configure(cursor="hand2"))
         self.chat_textbox.tag_bind("attachment_link", "<Leave>", lambda e: self.chat_textbox._textbox.configure(cursor="arrow"))
@@ -9047,12 +9105,16 @@ class App(ctk.CTk):
         
         self.attached_files_frame.grid(row=0, column=0, columnspan=4, padx=(0, 10), pady=(5, 0), sticky="ew")
         
+        # v2.5.3: адаптивные чипы вложений; длинные имена обрезаются с подсказкой полного имени
         for filename in self.chat_attachments_dict.keys():
-            chip = ctk.CTkFrame(self.attached_files_frame, corner_radius=15, fg_color="#333333")
+            chip = ctk.CTkFrame(self.attached_files_frame, corner_radius=15, fg_color=_UI_COLORS["chip_bg"])
             chip.pack(side="left", padx=5)
-            lbl = ctk.CTkLabel(chip, text=f"📄 {filename}", font=ctk.CTkFont(size=12), text_color="white")
+            display_name = filename if len(filename) <= 34 else filename[:31] + "…"
+            lbl = ctk.CTkLabel(chip, text=f"📄 {display_name}", font=ctk.CTkFont(size=12), text_color=_UI_COLORS["chip_text"])
             lbl.pack(side="left", padx=(10, 5), pady=2)
-            btn_close = ctk.CTkButton(chip, text="✖", width=20, height=20, fg_color="transparent", hover_color="#555555", text_color="white",
+            if display_name != filename:
+                _hover_tip(lbl, filename)
+            btn_close = ctk.CTkButton(chip, text="✖", width=20, height=20, fg_color="transparent", hover_color=_UI_COLORS["chip_hover"], text_color=_UI_COLORS["chip_text"],
                                        command=lambda f=filename: self.remove_chat_attachment(f))
             btn_close.pack(side="left", padx=(0, 5), pady=2)
 
@@ -9152,6 +9214,26 @@ class App(ctk.CTk):
 
         formatted_lines.append(bot_border)
         return "\n" + "\n".join(formatted_lines) + "\n"
+
+    # v2.5.3: перекраска тегов чата под текущую тему (колбэк AppearanceModeTracker; никогда не бросает)
+    def _apply_chat_tag_colors(self, _mode=None):
+        try:
+            tw = self.chat_textbox._textbox
+            heading_fg = _ui_color(_UI_COLORS["heading"])
+            tw.tag_config("h1", foreground=heading_fg)
+            tw.tag_config("h2", foreground=heading_fg)
+            tw.tag_config("h3", foreground=heading_fg)
+            tw.tag_config("h4", foreground=heading_fg)
+            tw.tag_config("h5", foreground=heading_fg)
+            tw.tag_config("h6", foreground=heading_fg)
+            tw.tag_config("hr", foreground=_ui_color(_UI_COLORS["hr_text"]))
+            tw.tag_config("hyperlink", foreground=_ui_color(_UI_COLORS["link"]), underline=True)
+            tw.tag_config("system", foreground=_ui_color(_UI_COLORS["system_text"]))
+            tw.tag_config("tool_call", foreground=_ui_color(_UI_COLORS["tool_call_text"]))
+            tw.tag_config("badge_agent", background=_ui_color(_UI_COLORS["badge_agent_bg"]), foreground="white")
+            tw.tag_config("attachment_link", foreground=_ui_color(_UI_COLORS["link"]), underline=True)
+        except Exception:
+            pass
 
     def apply_markdown(self, start_index):
         self.chat_textbox.configure(state="normal")
@@ -9535,8 +9617,8 @@ class App(ctk.CTk):
                 row_frame,
                 text="✏️",
                 width=40,
-                fg_color="#444444",
-                hover_color="#333333",
+                fg_color=_UI_COLORS["muted_btn"],
+                hover_color=_UI_COLORS["muted_btn_hover"],
                 command=lambda fp=file_path, session_id=sid, ctitle=title: self.rename_chat_session(fp, session_id, ctitle)
             ).pack(side="right", padx=(0, 4), pady=8)
 
@@ -9544,8 +9626,8 @@ class App(ctk.CTk):
                 row_frame,
                 text="🗑",
                 width=40,
-                fg_color="#8E2A2A",
-                hover_color="#6D1F1F",
+                fg_color=_UI_COLORS["danger"],
+                hover_color=_UI_COLORS["danger_hover"],
                 command=lambda fp=file_path, session_id=sid, rf=row_frame: delete_session(fp, session_id, rf)
             ).pack(side="right", padx=(0, 0), pady=8)
 
@@ -10446,7 +10528,7 @@ class App(ctk.CTk):
         if not is_admin: embed_entry.configure(state="disabled", text_color="gray")
 
         # --- БЛОК НАСТРОЕК АУДИТОРА (Глубокий аудит / Рефлексия) ---
-        audit_separator = ctk.CTkFrame(models_col_right, height=2, fg_color="#3a3a3a")
+        audit_separator = ctk.CTkFrame(models_col_right, height=2, fg_color=_UI_COLORS["separator"])
         audit_separator.pack(fill="x", padx=10, pady=(15, 5))
         ctk.CTkLabel(models_col_right, text="🕵️‍♂️ Модель-Аудитор (Глубокий аудит):", font=ctk.CTkFont(weight="bold")).pack(pady=(5, 0))
 
@@ -10636,7 +10718,7 @@ class App(ctk.CTk):
                 
                 # Кнопка удаления только для Админа
                 if is_admin:
-                    btn = ctk.CTkButton(row, text="−", width=30, height=24, fg_color="#D32F2F", hover_color="#B71C1C",
+                    btn = ctk.CTkButton(row, text="−", width=30, height=24, fg_color=_UI_COLORS["danger"], hover_color=_UI_COLORS["danger_hover"],
                                         command=lambda p=f_path: remove_folder(p))
                     btn.pack(side="right", padx=5)
 
@@ -10749,7 +10831,7 @@ class App(ctk.CTk):
                 lbl.pack(side="left", padx=5, fill="x", expand=True)
                 # Кнопка удаления только для Админа
                 if is_admin:
-                    btn = ctk.CTkButton(row, text="−", width=30, height=24, fg_color="#D32F2F", hover_color="#B71C1C",
+                    btn = ctk.CTkButton(row, text="−", width=30, height=24, fg_color=_UI_COLORS["danger"], hover_color=_UI_COLORS["danger_hover"],
                                         command=lambda u=url: remove_xwiki_url(u))
                     btn.pack(side="right", padx=5)
         
@@ -11116,8 +11198,8 @@ class App(ctk.CTk):
 
             ctk.CTkButton(tools_frame, text="📋 Логи", width=110,
                           command=self.open_log_viewer).pack(side="left", padx=5)
-            ctk.CTkButton(tools_frame, text="🩺 Диагностика", width=130, fg_color="#455A64",
-                          hover_color="#263238",
+            ctk.CTkButton(tools_frame, text="🩺 Диагностика", width=130, fg_color=_UI_COLORS["steel"],
+                          hover_color=_UI_COLORS["steel_hover"],
                           command=self.run_diagnostics).pack(side="left", padx=5)
 
             # Ручная синхронизация БД — перенесена из sidebar; проверка пароля синхронизации из vault;
@@ -11146,16 +11228,16 @@ class App(ctk.CTk):
                     log_core.warning("Отказ в ручной синхронизации БД: неверный пароль синхронизации")
 
             sync_settings_btn = ctk.CTkButton(tools_frame, text="🔄 Синхронизировать базу", width=170,
-                                              fg_color="#2E7D32", hover_color="#1B5E20",
+                                              fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"],
                                               command=lambda: _manual_sync_with_password(sync_settings_btn, False))
             sync_settings_btn.pack(side="left", padx=5)
 
             xwiki_btn = ctk.CTkButton(tools_frame, text="🌐 Синхронизировать XWiki", width=150,
-                                      fg_color="#2E7D32", hover_color="#1B5E20",
+                                      fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"],
                                       command=lambda: _manual_sync_with_password(xwiki_btn, True))
             xwiki_btn.pack(side="left", padx=5)
 
-        save_btn = ctk.CTkButton(settings_window, text="Сохранить", command=save, fg_color="#2E7D32", hover_color="#1B5E20")
+        save_btn = ctk.CTkButton(settings_window, text="Сохранить", command=save, fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"])
         save_btn.pack(pady=(10, 20))
 
     # ==================== УПРАВЛЕНИЕ ПАМЯТЬЮ (v2.4.2) ====================
@@ -11221,14 +11303,14 @@ class App(ctk.CTk):
             try:
                 disk_text = _read_file_text()
             except Exception as e:
-                _set_status(f"Ошибка чтения файла памяти: {e}", "#e06c75")
+                _set_status(f"Ошибка чтения файла памяти: {e}", _UI_COLORS["error_text"])
                 return
             # Двухшаговое подтверждение: правки, не сохранённые в файл, будут потеряны
             if not initial and textbox.get("1.0", "end-1c") != state["snapshot"]:
                 if state["confirm"] != "reload":
                     state["confirm"] = "reload"
                     _set_status("В редакторе есть несохранённые правки — перезагрузка их уничтожит. "
-                                "Нажмите «🔄 Перезагрузить» ещё раз для подтверждения.", "#e5c07b")
+                                "Нажмите «🔄 Перезагрузить» ещё раз для подтверждения.", _UI_COLORS["warn_text"])
                     return
             state["confirm"] = None
             textbox.configure(state="normal")
@@ -11244,7 +11326,7 @@ class App(ctk.CTk):
         def add_fact():
             fact = fact_entry.get().strip()
             if not fact:
-                _set_status("Введите текст факта.", "#e5c07b")
+                _set_status("Введите текст факта.", _UI_COLORS["warn_text"])
                 return
             date_str = datetime.now().strftime("%d.%m.%Y %H:%M")
             textbox.insert("end", f"- [{date_str}] {fact}\n")
@@ -11257,7 +11339,7 @@ class App(ctk.CTk):
                 os.makedirs(memory_dir, exist_ok=True)
                 os.startfile(memory_dir)
             except Exception as e:
-                _set_status(f"Не удалось открыть папку Memory: {e}", "#e06c75")
+                _set_status(f"Не удалось открыть папку Memory: {e}", _UI_COLORS["error_text"])
 
         def do_save():
             editor_text = textbox.get("1.0", "end-1c")
@@ -11266,7 +11348,7 @@ class App(ctk.CTk):
             if not editor_text.strip() and not state.get("confirmed_empty", False):
                 state["confirmed_empty"] = True
                 _set_status("Память станет полностью пустой. Нажмите «💾 Сохранить и переиндексировать» "
-                            "ещё раз, чтобы подтвердить осознанную очистку.", "#e5c07b")
+                            "ещё раз, чтобы подтвердить осознанную очистку.", _UI_COLORS["warn_text"])
                 return
             # Guard 1: файл изменился с момента загрузки (агент/Секретарь дописал факт)
             try:
@@ -11276,7 +11358,7 @@ class App(ctk.CTk):
             if current_mtime != state["mtime"] and not state.get("confirmed_mtime", False):
                 state["confirmed_mtime"] = True
                 _set_status("Файл памяти изменён агентом с момента открытия — повторное нажатие перезапишет "
-                            "ваши правки поверх новых фактов агента.", "#e5c07b")
+                            "ваши правки поверх новых фактов агента.", _UI_COLORS["warn_text"])
                 return
             # сброс подтверждающих флагов после прохождения гвардов
             state["confirmed_empty"] = False
@@ -11309,7 +11391,7 @@ class App(ctk.CTk):
                 os.replace(tmp_path, memory_file)
             except Exception as e:
                 log_ui.error("Управление памятью: ошибка записи файла памяти: %s", e)
-                _set_status(f"Ошибка записи файла памяти: {e}", "#e06c75")
+                _set_status(f"Ошибка записи файла памяти: {e}", _UI_COLORS["error_text"])
                 return
             try:
                 state["mtime"] = os.path.getmtime(memory_file)
@@ -11320,24 +11402,24 @@ class App(ctk.CTk):
             # Переиндексация: при живом синке пропускаем (индекс догонит сам по mtime файла)
             if _sync_in_flight():
                 _set_status("Файл сохранён; переиндексация выполнится при ближайшей синхронизации "
-                            "автоматически (файл изменён).", "#8ab4f8")
+                            "автоматически (файл изменён).", _UI_COLORS["info_text"])
                 return
             save_btn.configure(state="disabled")
             _set_status("Переиндексация памяти...")
             threading.Thread(target=_do_reindex, daemon=True).start()
 
         def _do_reindex():
-            color = "#98c379"
+            color = _UI_COLORS["ok_text"]
             try:
                 # Повторная проверка: синк мог взлететь между гвардом и потоком (copytree vs открытые хэндлы)
                 if _sync_in_flight():
                     msg = "Файл сохранён; переиндексация выполнится при ближайшей синхронизации автоматически (файл изменён)."
-                    color = "#8ab4f8"
+                    color = _UI_COLORS["info_text"]
                 else:
                     msg = reindex_memory_file(memory_file)
             except Exception as e:
                 msg = f"Ошибка переиндексации памяти: {e}"
-                color = "#e06c75"
+                color = _UI_COLORS["error_text"]
                 log_ui.error("Управление памятью: %s", msg)
 
             def _finish():
@@ -11349,7 +11431,7 @@ class App(ctk.CTk):
             self.after(0, _finish)
 
         save_btn = ctk.CTkButton(toolbar, text="💾 Сохранить и переиндексировать", command=do_save,
-                                 fg_color="#2E7D32", hover_color="#1B5E20")
+                                 fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"])
         save_btn.pack(side="left", padx=(0, 8))
 
         reload_btn = ctk.CTkButton(toolbar, text="🔄 Перезагрузить", command=reload_from_file)
@@ -12273,7 +12355,7 @@ class App(ctk.CTk):
             if busy:
                 if not hasattr(self, "_send_btn_default_color"):
                     self._send_btn_default_color = self.send_button.cget("fg_color")
-                self.send_button.configure(text="⏹", fg_color="#a13333", command=self.stop_agent)
+                self.send_button.configure(text="⏹", fg_color=_UI_COLORS["danger"], command=self.stop_agent)
             else:
                 default_color = getattr(self, "_send_btn_default_color", None)
                 if default_color:
@@ -12297,9 +12379,9 @@ class App(ctk.CTk):
         # Инкрементируем счетчик и формируем бейдж пользователя
         self.message_counter += 1
         self.chat_textbox.configure(state="normal")
-        user_display_text = f" [№{self.message_counter}] Вы: {user_text} "
+        user_display_text = f" [№{self.message_counter}] Вы: "
         self.chat_textbox.insert("end", user_display_text, "badge_user")
-        self.chat_textbox.insert("end", "\n\n")
+        self.chat_textbox.insert("end", f"{user_text}\n\n")
         self.chat_textbox.see("end")
         self.chat_textbox.configure(state="disabled")
         
