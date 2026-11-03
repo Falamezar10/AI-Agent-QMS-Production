@@ -9242,14 +9242,19 @@ class App(ctk.CTk):
         formatted_lines.append(bot_border)
         return "\n" + "\n".join(formatted_lines) + "\n"
 
-    # v2.5.3: цветные PNG-иконки кнопок (Tk на Windows рисует эмодзи монохромом — цвет даётся картинками)
+    # v2.5.3: цветные PNG-иконки кнопок (Tk на Windows рисует эмодзи монохромом — цвет даётся картинками).
+    # CTkImage — штатный механизм customtkinter: масштабирует под DPR, кнопки остаются обычной высоты,
+    # картинка не обрезается (сырые tk.PhotoImage в 32px раздували кнопки и резались — по фидбеку пользователя)
     def _icon(self, name):
         if name not in self._icons:
             _base = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
                      else os.path.dirname(os.path.abspath(__file__)))
             path = os.path.join(_base, "assets", "icons", f"{name}.png")
             try:
-                self._icons[name] = tk.PhotoImage(file=path)
+                from PIL import Image
+
+                pil_img = Image.open(path).convert("RGBA")
+                self._icons[name] = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(18, 18))
             except Exception:
                 self._icons[name] = None
         return self._icons[name]
