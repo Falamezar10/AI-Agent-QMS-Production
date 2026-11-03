@@ -124,6 +124,23 @@ def _ui_color(value):
         return value[1] if dark else value[0]
     return value
 
+
+# v2.5.3: эмодзи-подсказки для кнопок на случай недоступности PNG-иконок (например exe без assets)
+_ICON_EMOJI = {
+    "settings": "⚙️",
+    "clear_chat": "🧹",
+    "history": "📚",
+    "memory": "🧠",
+    "export": "💾",
+    "logout": "🔑",
+    "sync_db": "🔄",
+    "sync_xwiki": "🌐",
+    "diagnostics": "🩺",
+    "logs": "📋",
+    "trash": "🗑",
+    "ok": "✅",
+}
+
 # Загружаем переменные окружения ДО инициализации эмбеддингов
 load_dotenv()
 wikipedia.set_lang("ru")  # Ищем на русском
@@ -7038,7 +7055,7 @@ class App(ctk.CTk):
         super().__init__()
         # Логирование настраивается ДО старта daemon-потоков (паук/синхронизация)
         setup_logging()
-        self.title(APP_NAME)
+        self.title(f"{APP_NAME} | Версия: {APP_VERSION}")
         self.geometry("900x650")
         self.minsize(900, 650)
         # v2.5.3: иконка окна — из .ico рядом с исходником/запускаемым exe (тихий fallback)
@@ -7050,6 +7067,7 @@ class App(ctk.CTk):
                 self.iconbitmap(_icon_path)
             except Exception:
                 pass
+        self._icons = {}
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
         
@@ -7098,9 +7116,10 @@ class App(ctk.CTk):
         for _pid in ("OpenCode Go", "CommandCode"):
             threading.Thread(target=self.fetch_provider_models_list, args=(_pid,), daemon=True).start()
         
-        self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
+        self.sidebar_frame = ctk.CTkFrame(self, width=280, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
-        # v2.5.3: сайдбар фиксированной ширины — длинные названия файлов при синхронизации не растягивают колонку
+        # v2.5.3: сайдбар фиксированной ширины (280px по фидбеку: «резиновые» 200px обрезали кнопки и текст);
+        # длинные названия файлов при синхронизации переносятся в строках, не растягивая колонку
         self.sidebar_frame.grid_propagate(False)
         # Делаем 5-ю строку резиновой, чтобы прижать нижние элементы
         self.sidebar_frame.grid_rowconfigure(5, weight=1)
@@ -7108,38 +7127,30 @@ class App(ctk.CTk):
         self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="ИИ-Агент СМК", font=ctk.CTkFont(size=20, weight="bold"))
         self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
         
-        self.settings_button = ctk.CTkButton(self.sidebar_frame, text="Настройки", command=self.open_settings)
+        self.settings_button = self._icon_button(self.sidebar_frame, "settings", "Настройки", self.open_settings)
         self.settings_button.grid(row=1, column=0, padx=20, pady=10)
         
-        self.clear_button = ctk.CTkButton(self.sidebar_frame, text="Очистить чат", command=self.clear_chat)
+        self.clear_button = self._icon_button(self.sidebar_frame, "clear_chat", "Очистить чат", self.clear_chat)
         self.clear_button.grid(row=2, column=0, padx=20, pady=10)
 
-        self.btn_history = ctk.CTkButton(self.sidebar_frame, text="📚 История диалогов", command=self.open_history_window)
+        self.btn_history = self._icon_button(self.sidebar_frame, "history", "История диалогов", self.open_history_window)
         self.btn_history.grid(row=3, column=0, padx=20, pady=10)
 
         # v2.4.2: редактор файловой памяти агента (admin; гейт видимости — в update_ui_for_role)
-        self.memory_btn = ctk.CTkButton(
-            self.sidebar_frame,
-            text="🧠 Управление памятью",
-            command=self.open_memory_manager
+        self.memory_btn = self._icon_button(
+            self.sidebar_frame, "memory", "Управление памятью", self.open_memory_manager
         )
         self.memory_btn.grid(row=4, column=0, padx=20, pady=10)
 
-        self.export_btn = ctk.CTkButton(
-            self.sidebar_frame,
-            text="💾 Экспорт в Word", 
-            command=self.export_chat_to_word,
-            fg_color=_UI_COLORS["success"],
-            hover_color=_UI_COLORS["success_hover"]
+        self.export_btn = self._icon_button(
+            self.sidebar_frame, "export", "Экспорт в Word", self.export_chat_to_word,
+            fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"]
         )
         self.export_btn.grid(row=5, column=0, padx=20, pady=10)
 
-        self.auth_btn = ctk.CTkButton(
-            self.sidebar_frame,
-            text="🔑 Войти как Админ",
-            command=self.prompt_auth,
-            fg_color=_UI_COLORS["steel"],
-            hover_color=_UI_COLORS["steel_hover"]
+        self.auth_btn = self._icon_button(
+            self.sidebar_frame, "logout", "Войти как Админ", self.prompt_auth,
+            fg_color=_UI_COLORS["steel"], hover_color=_UI_COLORS["steel_hover"]
         )
         self.auth_btn.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="s")
         
@@ -7187,14 +7198,14 @@ class App(ctk.CTk):
         self.progress_bar.grid(row=9, column=0, padx=20, pady=(15, 4), sticky="ew")
         self.progress_bar.set(0)
 
-        self.file_progress_label = ctk.CTkLabel(self.sidebar_frame, text="Ожидание синхронизации", font=ctk.CTkFont(size=11), wraplength=160)
+        self.file_progress_label = ctk.CTkLabel(self.sidebar_frame, text="Ожидание синхронизации", font=ctk.CTkFont(size=11), wraplength=240)
         self.file_progress_label.grid(row=10, column=0, padx=20, pady=(0, 6), sticky="w")
 
-        self.status_label = ctk.CTkLabel(self.sidebar_frame, text="Загрузка...", font=ctk.CTkFont(size=12), wraplength=160)
+        self.status_label = ctk.CTkLabel(self.sidebar_frame, text="Загрузка...", font=ctk.CTkFont(size=12), wraplength=240)
         self.status_label.grid(row=11, column=0, padx=20, pady=(5, 15))
 
         # Индикатор прогресса построения графа связей (обновляется фоновым пауком)
-        self.graph_status_label = ctk.CTkLabel(self.sidebar_frame, text="", font=ctk.CTkFont(size=11), text_color=_UI_COLORS["info_text"], wraplength=160)
+        self.graph_status_label = ctk.CTkLabel(self.sidebar_frame, text="", font=ctk.CTkFont(size=11), text_color=_UI_COLORS["info_text"], wraplength=240)
         self.graph_status_label.grid(row=12, column=0, padx=20, pady=(0, 10), sticky="w")
         
         self.chat_frame = ctk.CTkFrame(self)
@@ -7997,11 +8008,11 @@ class App(ctk.CTk):
         )
         combo.grid(row=0, column=0, sticky="ew", padx=(60, 6))
 
-        btn_save_tpl = ctk.CTkButton(top_panel, text="💾 Сохранить", width=110)
+        btn_save_tpl = self._icon_button(top_panel, "export", "Сохранить", width=110)
         btn_save_tpl.grid(row=0, column=1, padx=(6, 4))
 
-        btn_del_tpl = ctk.CTkButton(
-            top_panel, text="🗑 Удалить", width=90,
+        btn_del_tpl = self._icon_button(
+            top_panel, "trash", "Удалить", width=90,
             fg_color=_UI_COLORS["danger"], hover_color=_UI_COLORS["danger_hover"]
         )
         btn_del_tpl.grid(row=0, column=2, padx=(0, 0))
@@ -8073,8 +8084,8 @@ class App(ctk.CTk):
         error_label = ctk.CTkLabel(bottom_panel, text="", text_color=_UI_COLORS["error_text"], anchor="w")
         error_label.grid(row=0, column=0, sticky="ew", padx=4)
 
-        btn_send = ctk.CTkButton(
-            bottom_panel, text="✅ Отправить в чат", width=180,
+        btn_send = self._icon_button(
+            bottom_panel, "ok", "Отправить в чат", width=180,
             fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"]
         )
         btn_send.grid(row=1, column=0, pady=(6, 0))
@@ -8243,7 +8254,10 @@ class App(ctk.CTk):
             else:
                 self.memory_btn.grid_remove()
         if hasattr(self, "auth_btn"):
-            self.auth_btn.configure(text="🔒 Выйти (Админ)" if is_admin else "🔑 Войти как Админ")
+            self.auth_btn.configure(
+                text=("Выйти (Админ)" if is_admin else "Войти как Админ") if self._icon("logout") else
+                     ("🔒 Выйти (Админ)" if is_admin else "🔑 Войти как Админ")
+            )
         # Обновляем видимость кнопки микрофона при смене роли
         if hasattr(self, "record_btn"):
             if is_admin:
@@ -9227,6 +9241,26 @@ class App(ctk.CTk):
 
         formatted_lines.append(bot_border)
         return "\n" + "\n".join(formatted_lines) + "\n"
+
+    # v2.5.3: цветные PNG-иконки кнопок (Tk на Windows рисует эмодзи монохромом — цвет даётся картинками)
+    def _icon(self, name):
+        if name not in self._icons:
+            _base = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
+                     else os.path.dirname(os.path.abspath(__file__)))
+            path = os.path.join(_base, "assets", "icons", f"{name}.png")
+            try:
+                self._icons[name] = tk.PhotoImage(file=path)
+            except Exception:
+                self._icons[name] = None
+        return self._icons[name]
+
+    def _icon_button(self, parent, icon_key, label, command=None, **kwargs):
+        img = self._icon(icon_key)
+        fallback_emoji = _ICON_EMOJI.get(icon_key, "")
+        text = label if img else f"{fallback_emoji} {label}".strip()
+        return ctk.CTkButton(parent, text=text, image=img,
+                             compound="left" if img else None,
+                             command=command, **kwargs)
 
     # v2.5.3: перекраска тегов чата под текущую тему (колбэк AppearanceModeTracker; никогда не бросает)
     def _apply_chat_tag_colors(self, _mode=None):
@@ -11215,11 +11249,10 @@ class App(ctk.CTk):
                                               variable=self.log_level_var, state="readonly")
             log_level_combo.pack(side="left", padx=(0, 15))
 
-            ctk.CTkButton(tools_frame, text="📋 Логи", width=110,
-                          command=self.open_log_viewer).pack(side="left", padx=5)
-            ctk.CTkButton(tools_frame, text="🩺 Диагностика", width=130, fg_color=_UI_COLORS["steel"],
-                          hover_color=_UI_COLORS["steel_hover"],
-                          command=self.run_diagnostics).pack(side="left", padx=5)
+            self._icon_button(tools_frame, "logs", "Логи", self.open_log_viewer, width=110).pack(side="left", padx=5)
+            tools_diag_btn = self._icon_button(tools_frame, "diagnostics", "Диагностика", self.run_diagnostics,
+                                               width=130, fg_color=_UI_COLORS["steel"], hover_color=_UI_COLORS["steel_hover"])
+            tools_diag_btn.pack(side="left", padx=5)
 
             # Ручная синхронизация БД — перенесена из sidebar; проверка пароля синхронизации из vault;
             # параметризованный гейт: и референсом кнопки, и режимом (быстрая / XWiki-полная)
@@ -11246,14 +11279,14 @@ class App(ctk.CTk):
                     self.status_label.configure(text="Неверный пароль синхронизации")
                     log_core.warning("Отказ в ручной синхронизации БД: неверный пароль синхронизации")
 
-            sync_settings_btn = ctk.CTkButton(tools_frame, text="🔄 Синхронизировать базу", width=170,
-                                              fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"],
-                                              command=lambda: _manual_sync_with_password(sync_settings_btn, False))
+            sync_settings_btn = self._icon_button(tools_frame, "sync_db", "Синхронизировать базу",
+                                                  lambda: _manual_sync_with_password(sync_settings_btn, False),
+                                                  width=170, fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"])
             sync_settings_btn.pack(side="left", padx=5)
 
-            xwiki_btn = ctk.CTkButton(tools_frame, text="🌐 Синхронизировать XWiki", width=150,
-                                      fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"],
-                                      command=lambda: _manual_sync_with_password(xwiki_btn, True))
+            xwiki_btn = self._icon_button(tools_frame, "sync_xwiki", "Синхронизировать XWiki",
+                                          lambda: _manual_sync_with_password(xwiki_btn, True),
+                                          width=150, fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"])
             xwiki_btn.pack(side="left", padx=5)
 
         save_btn = ctk.CTkButton(settings_window, text="Сохранить", command=save, fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"])
@@ -11449,11 +11482,11 @@ class App(ctk.CTk):
                 _set_status(msg, color)
             self.after(0, _finish)
 
-        save_btn = ctk.CTkButton(toolbar, text="💾 Сохранить и переиндексировать", command=do_save,
-                                 fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"])
+        save_btn = self._icon_button(toolbar, "export", "Сохранить и переиндексировать", do_save,
+                                     fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"])
         save_btn.pack(side="left", padx=(0, 8))
 
-        reload_btn = ctk.CTkButton(toolbar, text="🔄 Перезагрузить", command=reload_from_file)
+        reload_btn = self._icon_button(toolbar, "sync_db", "Перезагрузить", reload_from_file)
         reload_btn.pack(side="left", padx=(0, 8))
 
         folder_btn = ctk.CTkButton(toolbar, text="📂 Открыть папку Memory", command=open_memory_folder)

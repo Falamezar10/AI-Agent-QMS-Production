@@ -22,7 +22,8 @@ echo Пожалуйста, не закрывайте это окно!
 echo.
 
 REM Если нарисуете новую иконку, поменяйте название в параметре --icon:
-python -m PyInstaller --noconfirm --onedir --windowed --icon="agent_icon_3.ico" --name "SMK_Agent" --collect-all "chromadb" --collect-all "pydantic" --hidden-import="sqlite3" --hidden-import="cryptography" --hidden-import="openpyxl" --hidden-import="docx" --hidden-import="fitz" --hidden-import="win32timezone" main.py
+REM assets (цветные PNG-иконки кнопок v2.5.3) кладём в сборку рядом с exe
+python -m PyInstaller --noconfirm --onedir --windowed --icon="agent_icon_3.ico" --name "SMK_Agent" --collect-all "chromadb" --collect-all "pydantic" --hidden-import="sqlite3" --hidden-import="cryptography" --hidden-import="openpyxl" --hidden-import="docx" --hidden-import="fitz" --hidden-import="win32timezone" --add-data "assets;assets" main.py
 
 if not exist "dist\SMK_Agent\SMK_Agent.exe" goto err_compile
 
