@@ -7160,7 +7160,7 @@ class App(ctk.CTk):
         self.logo_sub_label.grid(row=1, column=0, padx=20, sticky="w")
 
         self.accent_line = ctk.CTkFrame(self.sidebar_frame, height=2, fg_color=_UI_COLORS["accent"], corner_radius=0)
-        self.accent_line.grid(row=2, column=0, padx=20, pady=(8, 2), sticky="w")
+        self.accent_line.grid(row=2, column=0, padx=20, pady=(8, 2), sticky="ew")
 
         self.sidebar_head_session = _sidebar_heading("СЕССИЯ")
         self.sidebar_head_session.grid(row=3, column=0, padx=24, pady=(8, 4), sticky="ew")
