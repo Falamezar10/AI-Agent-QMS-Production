@@ -110,6 +110,7 @@ _UI_COLORS = {
     "icon_note":      "#FFD54F",
     "icon_edit":      "#FFD54F",
     "icon_trash":     ("#F0B9B9", "#E88B8B"),
+    "code_bg":        ("gray85", "gray17"),
     "separator":      ("gray80", "gray35"),
 }
 
@@ -7245,6 +7246,14 @@ class App(ctk.CTk):
         _chat_font = tkfont.Font(font=text_widget.cget("font"))
         text_widget.tag_config("system", foreground=_ui_color(_UI_COLORS["system_text"]),
                                font=(_chat_font.actual("family"), _chat_font.actual("size"), "italic"))
+        # v2.5.3 (md): курсив / зачёркнутый / inline-код / мелкий шрифт / сноска / цитаты
+        _base_args = {"family": _chat_font.actual("family"), "size": _chat_font.actual("size")}
+        text_widget.tag_config("italic", font=tkfont.Font(**_base_args, slant="italic"))
+        text_widget.tag_config("strike", font=tkfont.Font(**_base_args, overstrike=True))
+        text_widget.tag_config("code_inline", font=tkfont.Font(family="Consolas", size=_chat_font.actual("size")),
+                               background=_ui_color(_UI_COLORS["code_bg"]))
+        text_widget.tag_config("small", font=tkfont.Font(**_base_args, size=max(8, _chat_font.actual("size") - 2)))
+        text_widget.tag_config("quote", foreground=_ui_color(_UI_COLORS["system_text"]), lmargin1=12, lmargin2=12)
         text_widget.tag_config("badge_user", background=_UI_COLORS["badge_user_bg"], foreground="white", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"))
         text_widget.tag_config("badge_agent", background=_ui_color(_UI_COLORS["badge_agent_bg"]), foreground="white", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"))
         text_widget.tag_config("tool_call", foreground=_ui_color(_UI_COLORS["tool_call_text"]), font=ctk.CTkFont(family="Consolas", size=13, slant="italic"))
@@ -9283,6 +9292,8 @@ class App(ctk.CTk):
             _chat_font = tkfont.Font(font=tw.cget("font"))
             tw.tag_config("system", foreground=_ui_color(_UI_COLORS["system_text"]),
                           font=(_chat_font.actual("family"), _chat_font.actual("size"), "italic"))
+            tw.tag_config("code_inline", background=_ui_color(_UI_COLORS["code_bg"]))
+            tw.tag_config("quote", foreground=_ui_color(_UI_COLORS["system_text"]), lmargin1=12, lmargin2=12)
             tw.tag_config("tool_call", foreground=_ui_color(_UI_COLORS["tool_call_text"]))
             tw.tag_config("badge_agent", background=_ui_color(_UI_COLORS["badge_agent_bg"]), foreground="white")
             tw.tag_config("attachment_link", foreground=_ui_color(_UI_COLORS["link"]), underline=True)
@@ -9298,6 +9309,33 @@ class App(ctk.CTk):
         calculated_max_chars = max(50, (pixel_width - 40) // 8)
 
         raw_text = text_widget.get(start_index, end_index)
+
+        # v2.5.3 (md): текстовые замены ДО стилевых проходов (идемпотентны: повторный проход не находит маркеров)
+        for pattern in (
+            r'(\s*)- \[(?:x|X)\] ',   # чек-лист выполнено
+            r'(\s*)- \[ \] ',         # чек-лист не выполнено
+            r'(?m)^(\s*)- ',          # маркеры списков
+            r'(?m)^> ?',              # цитаты
+        ):
+            for m in list(re.finditer(pattern, raw_text))[::-1]:
+                tk_start = f"{start_index} + {m.start()} chars"
+                tk_end = f"{start_index} + {m.end()} chars"
+                text_widget.delete(tk_start, tk_end)
+                if "] " in pattern or pattern == r'(?m)^(\s*)- ':
+                    text_widget.insert(tk_start, m.group(1) + ("☑ " if pattern.startswith(r'(\s*)- \[(?:x|X)') else "☐ " if pattern == r'(\s*)- \[ \] ' else "• "))
+                elif pattern == r'(?m)^> ?':
+                    text_widget.insert(tk_start, "│  ")
+            raw_text = text_widget.get(start_index, self.chat_textbox.index("end-1c"))
+        # Разделитель --- → настоящая линия
+        for m in list(re.finditer(r'(?m)^-{3,}\s*$', raw_text))[::-1]:
+            tk_start = f"{start_index} + {m.start()} chars"
+            tk_end = f"{start_index} + {m.end()} chars"
+            text_widget.delete(tk_start, tk_end)
+            text_widget.insert(tk_start, "─" * 44)
+            text_widget.tag_add("hr", tk_start, f"{tk_start} + 44 chars")
+        raw_text = text_widget.get(start_index, self.chat_textbox.index("end-1c"))
+        end_index = self.chat_textbox.index("end-1c")
+
         table_matches = list(re.finditer(r'(^[ \t]*\|.*\|[ \t]*(\n|$))+', raw_text, re.MULTILINE))
 
         for match in reversed(table_matches):
@@ -9337,11 +9375,67 @@ class App(ctk.CTk):
             text_widget.tag_add("hide", tk_start, tk_inner_start)
             text_widget.tag_add("hide", tk_inner_end, tk_end)
 
-        for match in re.finditer(r'^---$', raw_text, re.MULTILINE):
+        # v2.5.3 (md): зачёркнутый ~~текст~~
+        for match in re.finditer(r'~~([^~\n]+?)~~', raw_text):
             m_start, m_end = match.start(), match.end()
             tk_start = f"{start_index} + {m_start} chars"
             tk_end = f"{start_index} + {m_end} chars"
-            text_widget.tag_add("hr", tk_start, tk_end)
+            tk_inner_start = f"{start_index} + {m_start + 2} chars"
+            tk_inner_end = f"{start_index} + {m_end - 2} chars"
+            text_widget.tag_add("strike", tk_inner_start, tk_inner_end)
+            text_widget.tag_add("hide", tk_start, tk_inner_start)
+            text_widget.tag_add("hide", tk_inner_end, tk_end)
+
+        # v2.5.3 (md): курсив *текст* (после жирного; пары только внутри одной строки)
+        for match in re.finditer(r'(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)', raw_text):
+            m_start, m_end = match.start(), match.end()
+            tk_start = f"{start_index} + {m_start} chars"
+            tk_end = f"{start_index} + {m_end} chars"
+            tk_inner_start = f"{start_index} + {m_start + 1} chars"
+            tk_inner_end = f"{start_index} + {m_end - 1} chars"
+            text_widget.tag_add("italic", tk_inner_start, tk_inner_end)
+            text_widget.tag_add("hide", tk_start, tk_inner_start)
+            text_widget.tag_add("hide", tk_inner_end, tk_end)
+
+        # v2.5.3 (md): inline-код `текст`
+        for match in re.finditer(r'`([^`\n]+)`', raw_text):
+            m_start, m_end = match.start(), match.end()
+            tk_start = f"{start_index} + {m_start} chars"
+            tk_end = f"{start_index} + {m_end} chars"
+            tk_inner_start = f"{start_index} + {m_start + 1} chars"
+            tk_inner_end = f"{start_index} + {m_end - 1} chars"
+            text_widget.tag_add("code_inline", tk_inner_start, tk_inner_end)
+            text_widget.tag_add("hide", tk_start, tk_inner_start)
+            text_widget.tag_add("hide", tk_inner_end, tk_end)
+
+        # v2.5.3 (md): мелкий шрифт <small>…</small>
+        for match in re.finditer(r'(?i)<small>(.*?)</small>', raw_text):
+            m_start, m_end = match.start(), match.end()
+            tk_start = f"{start_index} + {m_start} chars"
+            tk_end = f"{start_index} + {m_end} chars"
+            tk_inner_start = f"{start_index} + {m_start + 7} chars"
+            tk_inner_end = f"{start_index} + {m_end - 8} chars"
+            text_widget.tag_add("small", tk_inner_start, tk_inner_end)
+            text_widget.tag_add("hide", tk_start, tk_inner_start)
+            text_widget.tag_add("hide", tk_inner_end, tk_end)
+
+        # v2.5.3 (md): звёздочка-сноска в конце строки
+        for match in re.finditer(r'\*(?=\s*$)', raw_text):
+            tk_start = f"{start_index} + {match.start()} chars"
+            tk_end = f"{start_index} + {match.end()} chars"
+            text_widget.tag_add("small", tk_start, tk_end)
+
+        # v2.5.3 (md): цитата-блок «│  …» — строка целиком приглушённым курсивом с отступом
+        for match in re.finditer(r'(?m)^│  .*$', raw_text):
+            tk_start = f"{start_index} + {match.start()} chars"
+            tk_end = f"{start_index} + {match.end()} chars"
+            text_widget.tag_add("quote", tk_start, tk_end)
+
+        # v2.5.3 (md): цитатный блок «│  …» — строка целиком приглушённым курсивом с отступом
+        for match in re.finditer(r'(?m)^│  .*$', raw_text):
+            tk_start = f"{start_index} + {match.start()} chars"
+            tk_end = f"{start_index} + {match.end()} chars"
+            text_widget.tag_add("quote", tk_start, tk_end)
 
         # 4. Ссылки (Улучшенная "всеядная" регулярка)
         for match in re.finditer(r'\[(?:Из файла|Файл)[:\s]*([^\]]+)\]', raw_text, re.IGNORECASE):
@@ -9817,6 +9911,38 @@ class App(ctk.CTk):
                 run_sender = p_sender.add_run(sender_name)
                 run_sender.bold = True
                 run_sender.font.color.rgb = RGBColor(0, 102, 204) if role == "user" else RGBColor(0, 153, 76)
+
+                # v2.5.3: инлайн-разметка для экспорта (сохраняет оформление чата в Word):
+                # **жирный**, *курсив*, ~~зачёркнутый~~, `код`, <small>мелкий</small>, звёздочка-сноска
+                def add_md_runs(paragraph, text):
+                    text = re.sub(r'\*(?=\s*$)', '<sup>*</sup>', text)
+                    md_inline = re.compile(
+                        r'(<sup>.*?</sup>)'
+                        r'|(~~.*?~~)'
+                        r'|(\*\*.*?\*\*)'
+                        r'|(\*[^*\n]+\*)'
+                        r'|(`[^`\n]+`)'
+                        r'|(<small>.*?</small>)',
+                        re.IGNORECASE)
+                    for part in md_inline.split(text):
+                        if not part:
+                            continue
+                        lower = part.lower()
+                        if lower.startswith('<sup>') and lower.endswith('</sup>'):
+                            run = paragraph.add_run(part[5:-6])
+                            run.font.superscript = True
+                            continue
+                        run = paragraph.add_run(part)
+                        if lower.startswith('<small>') and lower.endswith('</small>'):
+                            run.font.size = Pt(9)
+                        elif part.startswith('~~') and part.endswith('~~') and len(part) > 4:
+                            run.font.strike = True
+                        elif part.startswith('**') and part.endswith('**') and len(part) > 4:
+                            run.bold = True
+                        elif part.startswith('*') and part.endswith('*') and len(part) > 2:
+                            run.italic = True
+                        elif part.startswith('`') and part.endswith('`') and len(part) > 2:
+                            run.font.name = "Consolas"
                 
                 # ОЧИСТКА ОТ ШУМА АГЕНТА (БЕЗ глобальной замены <br>)
                 clean_lines = []
@@ -9888,19 +10014,43 @@ class App(ctk.CTk):
                             text = header_match.group(2).replace('**', '')
                             text = re.sub(r'<br\s*/?>', ' ', text, flags=re.IGNORECASE)
                             doc.add_heading(text.strip(), level=min(level, 9))
+                        elif re.match(r'^-{3,}\s*$', line_stripped):
+                            # v2.5.3 (md): разделитель ---
+                            sep = doc.add_paragraph()
+                            sep_run = sep.add_run("─" * 40)
+                            sep_run.font.color.rgb = RGBColor(0xB0, 0xB6, 0xBC)
+                        elif re.match(r'^\s*-\s+\[(?:x|X)\] ', line_stripped):
+                            # v2.5.3 (md): чек-лист выполнено
+                            inner = re.sub(r'^\s*-\s+\[(?:x|X)\]\s*', '', line_stripped)
+                            p = doc.add_paragraph()
+                            p.add_run("☑ ")
+                            add_md_runs(p, inner)
+                        elif re.match(r'^\s*-\s+\[ \] ', line_stripped):
+                            # v2.5.3 (md): чек-лист не выполнено
+                            inner = re.sub(r'^\s*-\s+\[ \]\s*', '', line_stripped)
+                            p = doc.add_paragraph()
+                            p.add_run("☐ ")
+                            add_md_runs(p, inner)
+                        elif re.match(r'^\s*>', line_stripped):
+                            # v2.5.3 (md): цитата
+                            inner = re.sub(r'^\s*>\s?', '', line_stripped)
+                            p = doc.add_paragraph()
+                            try:
+                                p.style = doc.styles['Quote']
+                            except Exception:
+                                pass
+                            add_md_runs(p, inner)
+                        elif re.match(r'^\s*-\s+', line_stripped):
+                            # v2.5.3 (md): маркированный список
+                            inner = re.sub(r'^\s*-\s+', '', line_stripped)
+                            p = doc.add_paragraph()
+                            p.add_run("• ")
+                            add_md_runs(p, inner)
                         else:
-                            # Обычный абзац
                             p = doc.add_paragraph()
                             # ЛОКАЛЬНАЯ ОЧИСТКА: Меняем <br> на \n
                             line_clean = re.sub(r'<br\s*/?>', '\n', line_stripped, flags=re.IGNORECASE)
-                            # Разбиваем строку по маркерам жирного текста
-                            parts = re.split(r'(\*\*.*?\*\*)', line_clean)
-                            for part in parts:
-                                if part.startswith('**') and part.endswith('**'):
-                                    run = p.add_run(part[2:-2])
-                                    run.bold = True
-                                else:
-                                    p.add_run(part)
+                            add_md_runs(p, line_clean)
 
                 # Если сообщение закончилось таблицей
                 if in_table:
