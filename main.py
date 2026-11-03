@@ -7067,6 +7067,9 @@ def _hover_tip(widget, text):
 
 
 class App(ctk.CTk):
+    # v2.6.0: текст-подсказка композера (плейсхолдер inserts'ится в поле и срезается перед вставкой)
+    _INPUT_PLACEHOLDER = "Спросите что-нибудь…"
+
     def __init__(self):
         super().__init__()
         # Логирование настраивается ДО старта daemon-потоков (паук/синхронизация)
@@ -7137,39 +7140,64 @@ class App(ctk.CTk):
         # v2.5.3: сайдбар фиксированной ширины (280px по фидбеку: «резиновые» 200px обрезали кнопки и текст);
         # длинные названия файлов при синхронизации переносятся в строках, не растягивая колонку
         self.sidebar_frame.grid_propagate(False)
-        # Делаем 5-ю строку резиновой, чтобы прижать нижние элементы
-        self.sidebar_frame.grid_rowconfigure(5, weight=1)
-        
+        # v2.6.0: резиновым делаем пустой spacer-ряд 14 перед статус-блоком (вес раньше висел на ряде
+        # кнопки «Экспорт» — при высоких окнах «плыла» вся композиция секций)
+        self.sidebar_frame.grid_rowconfigure(14, weight=1)
+
+        # v2.6.0: заголовки секций сайдбара
+        def _sidebar_heading(text):
+            return ctk.CTkLabel(self.sidebar_frame, text=text, font=ctk.CTkFont(size=11, weight="bold"),
+                                text_color=_UI_COLORS["system_text"], anchor="w")
+
         self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="ИИ-Агент СМК", font=ctk.CTkFont(size=20, weight="bold"))
-        self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
-        
-        self.settings_button = self._icon_button(self.sidebar_frame, "settings", "Настройки", self.open_settings, width=240)
-        self.settings_button.grid(row=1, column=0, padx=20, pady=10)
-        
+        self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 4))
+
+        # v2.6.0: подзаголовок лого + accent-полоска
+        self.logo_sub_label = ctk.CTkLabel(
+            self.sidebar_frame, text="Ассистент системы менеджмента качества",
+            font=ctk.CTkFont(size=11), text_color=_UI_COLORS["system_text"], wraplength=240, anchor="w", justify="left"
+        )
+        self.logo_sub_label.grid(row=1, column=0, padx=20, sticky="w")
+
+        self.accent_line = ctk.CTkFrame(self.sidebar_frame, height=2, fg_color=_UI_COLORS["accent"], corner_radius=0)
+        self.accent_line.grid(row=2, column=0, padx=20, pady=(8, 2), sticky="w")
+
+        self.sidebar_head_session = _sidebar_heading("СЕССИЯ")
+        self.sidebar_head_session.grid(row=3, column=0, padx=24, pady=(8, 4), sticky="ew")
+
         self.clear_button = self._icon_button(self.sidebar_frame, "clear_chat", "Очистить чат", self.clear_chat, width=240)
-        self.clear_button.grid(row=2, column=0, padx=20, pady=10)
+        self.clear_button.grid(row=4, column=0, padx=20, pady=4)
 
         self.btn_history = self._icon_button(self.sidebar_frame, "history", "История диалогов", self.open_history_window, width=240)
-        self.btn_history.grid(row=3, column=0, padx=20, pady=10)
-
-        # v2.4.2: редактор файловой памяти агента (admin; гейт видимости — в update_ui_for_role)
-        self.memory_btn = self._icon_button(
-            self.sidebar_frame, "memory", "Управление памятью", self.open_memory_manager, width=240
-        )
-        self.memory_btn.grid(row=4, column=0, padx=20, pady=10)
+        self.btn_history.grid(row=5, column=0, padx=20, pady=4)
 
         self.export_btn = self._icon_button(
             self.sidebar_frame, "export", "Экспорт в Word", self.export_chat_to_word, width=240,
             fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"]
         )
-        self.export_btn.grid(row=5, column=0, padx=20, pady=10)
+        self.export_btn.grid(row=6, column=0, padx=20, pady=4)
+
+        self.sidebar_head_system = _sidebar_heading("СИСТЕМА")
+        self.sidebar_head_system.grid(row=7, column=0, padx=24, pady=(12, 4), sticky="ew")
+
+        self.settings_button = self._icon_button(self.sidebar_frame, "settings", "Настройки", self.open_settings, width=240)
+        self.settings_button.grid(row=8, column=0, padx=20, pady=4)
+
+        # v2.4.2: редактор файловой памяти агента (admin; гейт видимости — в update_ui_for_role)
+        self.memory_btn = self._icon_button(
+            self.sidebar_frame, "memory", "Управление памятью", self.open_memory_manager, width=240
+        )
+        self.memory_btn.grid(row=9, column=0, padx=20, pady=4)
 
         self.auth_btn = self._icon_button(
             self.sidebar_frame, "logout", "Войти как Админ", self.prompt_auth, width=240,
             fg_color=_UI_COLORS["steel"], hover_color=_UI_COLORS["steel_hover"]
         )
-        self.auth_btn.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="s")
-        
+        self.auth_btn.grid(row=10, column=0, padx=20, pady=4)
+
+        self.sidebar_head_modes = _sidebar_heading("РЕЖИМЫ")
+        self.sidebar_head_modes.grid(row=11, column=0, padx=24, pady=(12, 4), sticky="ew")
+
         # --- Тумблер автономного чтения ---
         def toggle_auto_read():
             if getattr(self, "current_role", "guest") == "admin":
@@ -7182,7 +7210,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=11),
             command=toggle_auto_read
         )
-        self.auto_read_switch.grid(row=7, column=0, padx=20, pady=(15, 0))
+        self.auto_read_switch.grid(row=12, column=0, padx=20, pady=4)
         # ----------------------------------------
 
         # --- Тумблер глубокого аудита (Рефлексия) ---
@@ -7196,7 +7224,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=11),
             command=toggle_deep_audit
         )
-        self.deep_audit_switch.grid(row=8, column=0, padx=20, pady=(8, 0))
+        self.deep_audit_switch.grid(row=13, column=0, padx=20, pady=4)
         if self.current_settings.get("deep_audit_enabled", False):
             self.deep_audit_switch.select()
         else:
@@ -7210,19 +7238,23 @@ class App(ctk.CTk):
 
         self.update_ui_for_role()
 
+        # row 14 — пустой spacer (единственный weight в сайдбаре)
+        self.sidebar_hairline = ctk.CTkFrame(self.sidebar_frame, height=1, fg_color=_UI_COLORS["separator"], corner_radius=0)
+        self.sidebar_hairline.grid(row=15, column=0, padx=20, pady=(0, 8), sticky="ew")
+
         self.progress_bar = ctk.CTkProgressBar(self.sidebar_frame)
-        self.progress_bar.grid(row=9, column=0, padx=20, pady=(15, 4), sticky="ew")
+        self.progress_bar.grid(row=16, column=0, padx=20, pady=(0, 4), sticky="ew")
         self.progress_bar.set(0)
 
         self.file_progress_label = ctk.CTkLabel(self.sidebar_frame, text="Ожидание синхронизации", font=ctk.CTkFont(size=11), wraplength=240)
-        self.file_progress_label.grid(row=10, column=0, padx=20, pady=(0, 6))
+        self.file_progress_label.grid(row=17, column=0, padx=20, pady=(0, 6))
 
         self.status_label = ctk.CTkLabel(self.sidebar_frame, text="Загрузка...", font=ctk.CTkFont(size=12), wraplength=240)
-        self.status_label.grid(row=11, column=0, padx=20, pady=(5, 15))
+        self.status_label.grid(row=18, column=0, padx=20, pady=(0, 5))
 
         # Индикатор прогресса построения графа связей (обновляется фоновым пауком)
         self.graph_status_label = ctk.CTkLabel(self.sidebar_frame, text="", font=ctk.CTkFont(size=11), text_color=_UI_COLORS["info_text"], wraplength=240)
-        self.graph_status_label.grid(row=12, column=0, padx=20, pady=(0, 10))
+        self.graph_status_label.grid(row=19, column=0, padx=20, pady=(0, 12))
         
         self.chat_frame = ctk.CTkFrame(self)
         self.chat_frame.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
@@ -7282,18 +7314,19 @@ class App(ctk.CTk):
         
         self.input_frame = ctk.CTkFrame(self.chat_frame)
         self.input_frame.grid(row=1, column=0, padx=10, pady=(5, 10), sticky="ew")
-        self.input_frame.grid_columnconfigure(0, weight=1)
+        # v2.6.0: раскладка мессенджера — колонки [кнопки][spacer][счётчик][➤]; поле ввода на всю ширину
+        self.input_frame.grid_columnconfigure(0, weight=0)
+        self.input_frame.grid_columnconfigure(1, weight=1)
+        self.input_frame.grid_columnconfigure(2, weight=0)
+        self.input_frame.grid_columnconfigure(3, weight=0)
         
         # Панель прикрепленных файлов (над полем ввода)
         self.attached_files_frame = ctk.CTkScrollableFrame(self.input_frame, height=40, orientation="horizontal", fg_color="transparent")
         # Изначально скрыта — отображается только при наличии вложений
         
-        self.input_frame.grid_rowconfigure(0, weight=0)
-        self.input_frame.grid_rowconfigure(1, weight=1)
-        
-        # Многострочное текстовое поле (высота 80px - это примерно 3-4 строки)
+        # Многострочное текстовое поле (базовая высота 80px; авторост до капа ~6 строк ведёт _refresh_input_state)
         self.input_entry = ctk.CTkTextbox(self.input_frame, font=ctk.CTkFont(size=14), height=80, wrap="word")
-        self.input_entry.grid(row=1, column=0, padx=(0, 10), pady=10, sticky="ew")
+        self.input_entry.grid(row=1, column=0, columnspan=4, padx=0, pady=(6, 6), sticky="ew")
 
         # Обработка Enter (Отправка) и Shift+Enter (Перенос строки)
         def enter_pressed(event):
@@ -7306,11 +7339,11 @@ class App(ctk.CTk):
 
         self.input_entry.bind("<Return>", enter_pressed)
         
-        # Фрейм для кнопок ввода (компактная сетка 2x2)
+        # Фрейм для кнопок ввода (нижний ряд слева)
         buttons_frame = ctk.CTkFrame(self.input_frame, fg_color="transparent")
-        buttons_frame.grid(row=1, column=1, padx=(5, 0), pady=10)
+        buttons_frame.grid(row=2, column=0, padx=0, pady=(0, 10), sticky="w")
 
-        # [0, 0] Кнопка прикрепления файлов (Скрепка)
+        # Кнопка прикрепления файлов (Скрепка)
         self.attach_button = ctk.CTkButton(
             buttons_frame, text="📎", width=40, height=36,
             command=self.handle_attach_file, font=ctk.CTkFont(family="Segoe UI Emoji", size=18),
@@ -7318,7 +7351,7 @@ class App(ctk.CTk):
         )
         self.attach_button.grid(row=0, column=0, padx=2, pady=2)
 
-        # [0, 1] Кнопка микрофона (Push-to-Talk) — только для админа
+        # Кнопка микрофона (Push-to-Talk) — только для админа
         self.record_btn = ctk.CTkButton(
             buttons_frame, text="🎤", width=40, height=36,
             fg_color=_UI_COLORS["accent"], hover_color=_UI_COLORS["accent_hover"],
@@ -7328,20 +7361,41 @@ class App(ctk.CTk):
         self.record_btn.bind('<ButtonPress-1>', self._on_record_start)
         self.record_btn.bind('<ButtonRelease-1>', self._on_record_stop)
 
-        # [1, 0] Промпт-мастер (конструктор запросов)
+        # Промпт-мастер (конструктор запросов)
         self.prompt_master_btn = ctk.CTkButton(
             buttons_frame, text="📝", width=40, height=36,
             command=self.open_prompt_master, font=ctk.CTkFont(family="Segoe UI Emoji", size=18),
             text_color=_UI_COLORS["icon_note"]
         )
-        self.prompt_master_btn.grid(row=1, column=0, padx=2, pady=2)
+        self.prompt_master_btn.grid(row=0, column=2, padx=2, pady=2)
 
-        # [1, 1] Кнопка отправки
+        # Кнопка отправки — собственный грид в нижнем ряду (правый нижний угол, ВНЕ buttons_frame)
         self.send_button = ctk.CTkButton(
-            buttons_frame, text="➤", width=40, height=36,
+            self.input_frame, text="➤", width=56, height=36,
             command=self.send_message, font=ctk.CTkFont(size=18)
         )
-        self.send_button.grid(row=1, column=1, padx=2, pady=2)
+        self.send_button.grid(row=2, column=3, padx=(8, 0), pady=(0, 10), sticky="e")
+
+        # v2.6.0: счётчик символов справа (прячется при пустом поле и видимом плейсхолдере)
+        self.input_char_label = ctk.CTkLabel(
+            self.input_frame, text="0 симв.", font=ctk.CTkFont(size=11), text_color=_UI_COLORS["system_text"]
+        )
+        self.input_char_label.grid(row=2, column=2, padx=(0, 8), pady=(0, 14), sticky="e")
+        self.input_char_label.grid_remove()
+
+        # v2.6.0: плейсхолдер поля ввода — курсив ОТ ШРИФТА САМОГО ПОЛЯ (не чата), БЕЗ дубликатного
+        # arg size (гейт crash `multiple values for keyword argument 'size'` из Дополнения 6 v2.5.3)
+        self._input_placeholder_visible = False
+        _input_inner = self.input_entry._textbox
+        _input_ph_font = tkfont.Font(font=_input_inner.cget("font"))
+        _input_ph_font.configure(slant="italic")
+        _input_inner.tag_config("input_ph", foreground=_ui_color(_UI_COLORS["system_text"]), font=_input_ph_font)
+
+        # v2.6.0: авторост/счётчик/плейсхолдер — единая точка; <Configure> ловит смену ширины окна
+        # (перенос строк меняет число строк), стартовый вызов показывает плейсхолдер при пустом поле
+        self.input_entry.bind("<KeyRelease>", self._refresh_input_state)
+        _input_inner.bind("<Configure>", self._refresh_input_state)
+        self._refresh_input_state()
 
         # v2.5.3: подсказки при наведении на кнопки ввода
         _hover_tip(self.attach_button, "Прикрепить файлы к сообщению")
@@ -8239,9 +8293,11 @@ class App(ctk.CTk):
 
             compiled = "\n".join(parts)
 
-            # Вставка в поле чата
+            # Вставка в поле чата (v2.6.0: плейсхолдер срезается перед вставкой)
+            self._ensure_input_ready()
             self.input_entry.delete("1.0", "end")
             self.input_entry.insert("1.0", compiled)
+            self._refresh_input_state()
 
             # Закрываем окно
             window.destroy()
@@ -8655,9 +8711,12 @@ class App(ctk.CTk):
 
     def _insert_transcript(self, text):
         """Вставка распознанного текста в поле ввода."""
+        # v2.6.0: плейсхолдер срезается, чтобы подсказка не приклеилась к транскрипту
+        self._ensure_input_ready()
         current_text = self.input_entry.get("1.0", "end-1c")
         separator = " " if current_text and not current_text.endswith(" ") else ""
         self.input_entry.insert("end", f"{separator}{text.strip()}")
+        self._refresh_input_state()
         self.record_btn.configure(fg_color=_UI_COLORS["accent"], hover_color=_UI_COLORS["accent_hover"], text="🎤", state="normal")
 
     def _reset_record_button(self):
@@ -9146,6 +9205,63 @@ class App(ctk.CTk):
 
         # Запуск фонового потока
         threading.Thread(target=load_files_bg, daemon=True).start()
+
+    # ==================== КОМПОЗЕР ВВОДА: единая точка состояния (v2.6.0) ====================
+    def _refresh_input_state(self, _event=None):
+        """Синхронизация композера: авторост высоты, счётчик символов, плейсхолдер.
+
+        Вызывается на KeyRelease / <Configure> внутреннего Tk-виджета и после
+        программных вставок/очисток. Тяжёлой работы нет — допустимо из GUI-потока."""
+        try:
+            frame = self.input_entry
+            inner = frame._textbox
+            text = inner.get("1.0", "end-1c")
+            hint = self._INPUT_PLACEHOLDER
+            ph = getattr(self, "_input_placeholder_visible", False)
+            if ph and text != hint:
+                # Правка поверх плейсхолдера — срезаем подсказку, остаётся реальный текст
+                if text.startswith(hint):
+                    inner.delete("1.0", f"1.0 + {len(hint)} chars")
+                    text = inner.get("1.0", "end-1c")
+                self._input_placeholder_visible = False
+                ph = False
+            if ph or text == "":
+                if not ph:
+                    inner.delete("1.0", "end")
+                    inner.insert("1.0", hint, "input_ph")
+                    self._input_placeholder_visible = True
+                self.input_char_label.grid_remove()
+                if int(frame.cget("height")) != 80:
+                    frame.configure(height=80)
+                return
+            self.input_char_label.configure(text=f"{len(text)} симв.")
+            self.input_char_label.grid()
+            # Авторост по отображаемым строкам (Tk count возвращает КОРТЕЖ; окончание "end", а не
+            # "end-1c": счётная семантика — РАЗНИЦА номеров display-строк, с "end-1c" недосчитывается одна)
+            try:
+                res = inner.count("1.0", "end", "displaylines")
+                lines = int(res[0] if isinstance(res, tuple) else res)
+            except Exception:
+                lines = max(1, int(str(inner.index("end-1c")).split(".")[0]))
+            line_h = tkfont.Font(font=inner.cget("font")).metrics("linespace")
+            max_h = max(80, 6 * line_h + 14)
+            new_h = min(max(80, lines * line_h + 14), max_h)
+            if int(frame.cget("height")) != new_h:
+                frame.configure(height=new_h)
+                inner.see("insert")
+        except Exception as e:
+            log_core.warning("_refresh_input_state: сбой синхронизации композера: %s", e)
+
+    def _ensure_input_ready(self):
+        """Гарантирует пустое поле перед программной вставкой: срезает плейсхолдер, если он виден.
+
+        Без этого транскрипт аудио/промпт приклеятся к подсказке «Спросите что-нибудь…»."""
+        try:
+            if getattr(self, "_input_placeholder_visible", False):
+                self.input_entry._textbox.delete("1.0", "end")
+                self._input_placeholder_visible = False
+        except Exception as e:
+            log_core.warning("_ensure_input_ready: не удалось срезать плейсхолдер: %s", e)
 
     def refresh_attached_files_ui(self):
         """Обновляет панель прикрепленных файлов над полем ввода."""
@@ -12615,6 +12731,9 @@ class App(ctk.CTk):
             self.append_to_chat("\n[⏹ Агент ещё отвечает — дождитесь ответа или нажмите ⏹]\n\n", "system")
             return
         user_text = self.input_entry.get("1.0", "end-1c").strip()
+        # v2.6.0: плейсхолдер не может уйти в чат как текст запроса
+        if getattr(self, "_input_placeholder_visible", False):
+            return
         if not user_text: return
         
         # Инкрементируем счетчик и формируем бейдж пользователя
@@ -12627,6 +12746,7 @@ class App(ctk.CTk):
         self.chat_textbox.configure(state="disabled")
         
         self.input_entry.delete("1.0", "end")
+        self._refresh_input_state()
         self.chat_history.append({"role": "user", "content": user_text, "_msg_id": self.message_counter})
         self.save_history()
         # ЭШЕЛОН 6: Генерируем название сессии ТОЛЬКО если это Админ
