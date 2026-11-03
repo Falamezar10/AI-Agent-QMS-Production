@@ -6819,10 +6819,13 @@ def save_global_settings(data):
 # ==================== GUI ПРИЛОЖЕНИЕ ====================
 
 APP_NAME = "ИИ-Агент СМК"
-APP_VERSION = "v2.7.0 Enterprise"
+APP_VERSION = "v2.7.1 Enterprise"
 APP_DEVELOPER = "Плаксунов В.Б."
 APP_PHONE = "2166"
 APP_DESCRIPTION = (
+    "2.7.1 - Исправление деплоя: в exe-версии снова видны цветные иконки и подписи кнопок "
+    "(иконки теперь ищутся и внутри _internal, а подписи не пропадают, если иконка недоступна); "
+    "логика агента, синхронизации и инструментов не менялась.\n"
     "2.7.0 - Удобство окон и чтение кода: все диалоговые окна (Настройки, Логи, Память, "
     "Промпт-мастер, История, Диагностика) получили единые аккуратные отступы, настраиваемые "
     "размеры и запоминают последний размер и место на экране; блоки кода в ответах и вставках "
@@ -6833,10 +6836,6 @@ APP_DESCRIPTION = (
     "полоской лого и статусом внизу; поле ввода теперь растёт до 6 строк, показывает счётчик "
     "символов, подсказку \"Спросите что-нибудь…\" и широкий нижний ряд кнопок; логика агента, "
     "синхронизации и инструментов не менялась.\n"
-    "2.5.3 - Обновлённый внешний вид: единая палитра интерфейса во вкладках и окнах, аккуратные плашки "
-    "сообщений чата, системные сообщения выделены приглушённым курсивом, единый цвет заголовков и ссылок, "
-    "подсказки при наведении на кнопки ввода, адаптивные чипы вложений, иконка окна; одинаково хорошо "
-    "читается в светлой и тёмной теме Windows; логика агента, синхронизации и инструментов не менялась.\n"
     "Полная история изменений: docs/DECISIONS.md.\n"
     "\n"
     "Корпоративный ИИ-ассистент для Системы Менеджмента Качества (СМК).\n"
@@ -9464,11 +9463,16 @@ class App(ctk.CTk):
     # v2.5.3: цветные PNG-иконки кнопок (Tk на Windows рисует эмодзи монохромом — цвет даётся картинками).
     # CTkImage — штатный механизм customtkinter: масштабирует под DPR, кнопки остаются обычной высоты,
     # картинка не обрезается (сырые tk.PhotoImage в 32px раздували кнопки и резались — по фидбеку пользователя)
+    # v2.7.1: в exe (PyInstaller onedir) assets лежат в _internal\assets — ищем и рядом с exe, и в sys._MEIPASS
     def _icon(self, name):
         if name not in self._icons:
             _base = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
                      else os.path.dirname(os.path.abspath(__file__)))
-            path = os.path.join(_base, "assets", "icons", f"{name}.png")
+            _paths = [os.path.join(_base, "assets", "icons", f"{name}.png")]
+            _meipass = getattr(sys, "_MEIPASS", "") or ""
+            if getattr(sys, "frozen", False) and _meipass and os.path.abspath(_meipass) != os.path.abspath(_base):
+                _paths.append(os.path.join(_meipass, "assets", "icons", f"{name}.png"))
+            path = next((p for p in _paths if os.path.exists(p)), _paths[0])
             try:
                 from PIL import Image
 
@@ -9482,8 +9486,10 @@ class App(ctk.CTk):
         img = self._icon(icon_key)
         fallback_emoji = _ICON_EMOJI.get(icon_key, "")
         text = label if img else f"{fallback_emoji} {label}".strip()
-        return ctk.CTkButton(parent, text=text, image=img,
-                             compound="left" if img else None,
+        # v2.7.1: compound=None запрещён — при нём customtkinter не гридит текст-метку
+        # вообще и кнопка рендерится пустой плашкой (прод-инцидент 2026-11-03, D-2026-11-03-03)
+        kwargs.pop("compound", None)
+        return ctk.CTkButton(parent, text=text, image=img, compound="left",
                              command=command, **kwargs)
 
     # v2.5.3: перекраска тегов чата под текущую тему (колбэк AppearanceModeTracker; никогда не бросает)
