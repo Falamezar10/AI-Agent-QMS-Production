@@ -29,9 +29,10 @@ GLYPHS = {
     "logs": "📋",
     "trash": "🗑️",
     "ok": "✅",
+    "folder": "📂",
 }
 
-# v2.5.3: эмодзи ⚙️/💾/🗑️ в Segoe UI Emoji серые по дизайну — дуотон-окраска в смысловые цвета
+# v2.5.3: эмодзи ⚙️/💾/🗑️/🔑 в Segoe UI Emoji серые по дизайну — дуотон-окраска в смысловые цвета
 TINTS = {
     "settings": ((40, 90, 150), (120, 190, 240)),
     "export": ((30, 80, 140), (130, 190, 240)),
@@ -57,16 +58,23 @@ def _tint(img, dark, light):
 
 def main():
     os.makedirs(OUT, exist_ok=True)
-    font = ImageFont.truetype(FONT, SIZE)
     for name, glyph in GLYPHS.items():
-        img = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(img)
-        draw.text((SIZE / 2, SIZE / 2), glyph, font=font, embedded_color=True, anchor="mm")
+        # Безобрезный рендер: Pillow со встроенными COLR-глифами смещает anchor — рисуем на избыточной
+        # канве 512 (глиф физически не выходит за край), затем центрируем по фактическим пикселям
+        big = Image.new("RGBA", (512, 512), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(big)
+        draw.text((256, 256), glyph, font=ImageFont.truetype(FONT, 200), embedded_color=True, anchor="mm")
+        bbox = big.getbbox()
+        if bbox:
+            big = big.crop(bbox)
+        img = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+        big.thumbnail((28, 28), Image.LANCZOS)
+        img.paste(big, ((32 - big.width) // 2, (32 - big.height) // 2), big)
         if name in TINTS:
             img = _tint(img, *TINTS[name])
         path = os.path.join(OUT, f"{name}.png")
         img.save(path)
-        print(f"OK {name}.png ({os.path.getsize(path)} байт)")
+        print(f"OK {name}.png ({os.path.getsize(path)} байт; глиф {big.width}x{big.height})")
 
 
 if __name__ == "__main__":

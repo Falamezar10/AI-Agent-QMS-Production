@@ -7127,29 +7127,29 @@ class App(ctk.CTk):
         self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="ИИ-Агент СМК", font=ctk.CTkFont(size=20, weight="bold"))
         self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
         
-        self.settings_button = self._icon_button(self.sidebar_frame, "settings", "Настройки", self.open_settings)
+        self.settings_button = self._icon_button(self.sidebar_frame, "settings", "Настройки", self.open_settings, width=240)
         self.settings_button.grid(row=1, column=0, padx=20, pady=10)
         
-        self.clear_button = self._icon_button(self.sidebar_frame, "clear_chat", "Очистить чат", self.clear_chat)
+        self.clear_button = self._icon_button(self.sidebar_frame, "clear_chat", "Очистить чат", self.clear_chat, width=240)
         self.clear_button.grid(row=2, column=0, padx=20, pady=10)
 
-        self.btn_history = self._icon_button(self.sidebar_frame, "history", "История диалогов", self.open_history_window)
+        self.btn_history = self._icon_button(self.sidebar_frame, "history", "История диалогов", self.open_history_window, width=240)
         self.btn_history.grid(row=3, column=0, padx=20, pady=10)
 
         # v2.4.2: редактор файловой памяти агента (admin; гейт видимости — в update_ui_for_role)
         self.memory_btn = self._icon_button(
-            self.sidebar_frame, "memory", "Управление памятью", self.open_memory_manager
+            self.sidebar_frame, "memory", "Управление памятью", self.open_memory_manager, width=240
         )
         self.memory_btn.grid(row=4, column=0, padx=20, pady=10)
 
         self.export_btn = self._icon_button(
-            self.sidebar_frame, "export", "Экспорт в Word", self.export_chat_to_word,
+            self.sidebar_frame, "export", "Экспорт в Word", self.export_chat_to_word, width=240,
             fg_color=_UI_COLORS["success"], hover_color=_UI_COLORS["success_hover"]
         )
         self.export_btn.grid(row=5, column=0, padx=20, pady=10)
 
         self.auth_btn = self._icon_button(
-            self.sidebar_frame, "logout", "Войти как Админ", self.prompt_auth,
+            self.sidebar_frame, "logout", "Войти как Админ", self.prompt_auth, width=240,
             fg_color=_UI_COLORS["steel"], hover_color=_UI_COLORS["steel_hover"]
         )
         self.auth_btn.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="s")
@@ -7166,7 +7166,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=11),
             command=toggle_auto_read
         )
-        self.auto_read_switch.grid(row=7, column=0, padx=20, pady=(15, 0), sticky="s")
+        self.auto_read_switch.grid(row=7, column=0, padx=20, pady=(15, 0))
         # ----------------------------------------
 
         # --- Тумблер глубокого аудита (Рефлексия) ---
@@ -7180,7 +7180,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=11),
             command=toggle_deep_audit
         )
-        self.deep_audit_switch.grid(row=8, column=0, padx=20, pady=(8, 0), sticky="s")
+        self.deep_audit_switch.grid(row=8, column=0, padx=20, pady=(8, 0))
         if self.current_settings.get("deep_audit_enabled", False):
             self.deep_audit_switch.select()
         else:
@@ -7199,14 +7199,14 @@ class App(ctk.CTk):
         self.progress_bar.set(0)
 
         self.file_progress_label = ctk.CTkLabel(self.sidebar_frame, text="Ожидание синхронизации", font=ctk.CTkFont(size=11), wraplength=240)
-        self.file_progress_label.grid(row=10, column=0, padx=20, pady=(0, 6), sticky="w")
+        self.file_progress_label.grid(row=10, column=0, padx=20, pady=(0, 6))
 
         self.status_label = ctk.CTkLabel(self.sidebar_frame, text="Загрузка...", font=ctk.CTkFont(size=12), wraplength=240)
         self.status_label.grid(row=11, column=0, padx=20, pady=(5, 15))
 
         # Индикатор прогресса построения графа связей (обновляется фоновым пауком)
         self.graph_status_label = ctk.CTkLabel(self.sidebar_frame, text="", font=ctk.CTkFont(size=11), text_color=_UI_COLORS["info_text"], wraplength=240)
-        self.graph_status_label.grid(row=12, column=0, padx=20, pady=(0, 10), sticky="w")
+        self.graph_status_label.grid(row=12, column=0, padx=20, pady=(0, 10))
         
         self.chat_frame = ctk.CTkFrame(self)
         self.chat_frame.grid(row=0, column=1, padx=10, pady=10, sticky="nsew")
@@ -9965,24 +9965,24 @@ class App(ctk.CTk):
         tab_models = tabview.add("Модели")
         tab_excludes = tabview.add("Исключения")
         tab_folders = tabview.add("Папки")
-        tab_about = tabview.add("О прогр. ℹ️")
+        tab_about = tabview.add("О прогр.")
 
         # Флаг для удобного разделения прав
         is_admin = (self.current_role == "admin")
-        tab_security = tabview.add("Безопасность 🔒") if is_admin else None
+        tab_security = tabview.add("Безопасность") if is_admin else None
 
         # --- ВКЛАДКА: АУДИО И СЕТЬ (ТОЛЬКО ДЛЯ АДМИНА) ---
         tab_audio_net = tabview.add("Аудио/Сеть") if is_admin else None
 
         # --- ВКЛАДКА: XWIKI (ВИДИМА ДЛЯ ВСЕХ) ---
-        tab_xwiki = tabview.add("XWiki 🌐")
+        tab_xwiki = tabview.add("XWiki")
 
-        tab_excel = tabview.add("Excel 📊")
+        tab_excel = tabview.add("Excel")
 
         # --- ВКЛАДКА: RERANK (ADVANCED RAG, ТОЛЬКО ДЛЯ АДМИНА) ---
         tab_rerank = tabview.add("Rerank") if is_admin else None
         # --- ВКЛАДКА: ГРАФЫ (GRAPHRAG, ТОЛЬКО ДЛЯ АДМИНА) ---
-        tab_graph = tabview.add("Графы 🕸️") if is_admin else None
+        tab_graph = tabview.add("Графы") if is_admin else None
         if is_admin and tab_rerank is not None:
             # Обновляем расшифрованный ключ Cohere из Vault на случай изменения
             self.cohere_api_key_decrypted = get_vault_data().get("cohere_key", "")
@@ -11494,7 +11494,7 @@ class App(ctk.CTk):
         reload_btn = self._icon_button(toolbar, "sync_db", "Перезагрузить", reload_from_file)
         reload_btn.pack(side="left", padx=(0, 8))
 
-        folder_btn = ctk.CTkButton(toolbar, text="📂 Открыть папку Memory", command=open_memory_folder)
+        folder_btn = self._icon_button(toolbar, "folder", "Открыть папку Memory", open_memory_folder)
         folder_btn.pack(side="right")
 
         fact_label = ctk.CTkLabel(toolbar2, text="Новый факт:")
@@ -11549,10 +11549,8 @@ class App(ctk.CTk):
         auto_check = ctk.CTkCheckBox(filter_frame, text="Автообновление (3 с)", variable=auto_var)
         auto_check.pack(side="left", padx=(0, 10))
 
-        ctk.CTkButton(filter_frame, text="🔄 Обновить", width=110,
-                      command=lambda: refresh()).pack(side="left", padx=5)
-        ctk.CTkButton(filter_frame, text="📂 Открыть папку логов", width=170,
-                      command=lambda: _open_log_dir()).pack(side="left", padx=5)
+        self._icon_button(filter_frame, "sync_db", "Обновить", refresh, width=110).pack(side="left", padx=5)
+        self._icon_button(filter_frame, "folder", "Открыть папку логов", _open_log_dir, width=170).pack(side="left", padx=5)
 
         textbox = ctk.CTkTextbox(win, wrap="none", font=ctk.CTkFont(family="Consolas", size=12))
         textbox.pack(fill="both", expand=True, padx=10, pady=(5, 10))
