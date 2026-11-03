@@ -6993,6 +6993,21 @@ def install_cyrillic_shortcuts(root):
     log_core.info("Кириллические биндинги Ctrl+C/X/V/A установлены (маршрут по event.char/keycode)")
 
 
+def _strip_md_marks(text):
+    """v2.5.3 (md): чистит инлайн-разметку Markdown из строки (ячейки таблиц, где стили не нужны).
+
+    Порядок от более длинных маркеров к коротким: ***x*** → **x** → *x* → ~~x~~ → `x` → small/sup.
+    """
+    text = re.sub(r'\*\*\*([^*\n]+?)\*\*\*', r'\1', text)
+    text = re.sub(r'\*\*([^*]+?)\*\*', r'\1', text)
+    text = re.sub(r'\*([^*\n]+?)\*', r'\1', text)
+    text = re.sub(r'~~([^~\n]+?)~~', r'\1', text)
+    text = re.sub(r'`([^`\n]+?)`', r'\1', text)
+    text = re.sub(r'(?i)<small>(.*?)</small>', r'\1', text)
+    text = re.sub(r'(?i)<sup>(.*?)</sup>', r'\1', text)
+    return text
+
+
 def _hover_tip(widget, text):
     """Всплывающая подсказка при наведении курсора: показ через 600 мс, скрытие при уходе/клике."""
     state = {"after": None, "tip": None}
@@ -7254,6 +7269,8 @@ class App(ctk.CTk):
                                background=_ui_color(_UI_COLORS["code_bg"]))
         text_widget.tag_config("small", font=tkfont.Font(family=_base_args["family"],
                                 size=max(8, _chat_font.actual("size") - 2)))
+        # v2.5.3 (md): тройной ***жирный курсив*** — свой тег (объявлен после bold/italic — выше их приоритет)
+        text_widget.tag_config("bi", font=tkfont.Font(**_base_args, slant="italic", weight="bold"))
         text_widget.tag_config("quote", foreground=_ui_color(_UI_COLORS["system_text"]), lmargin1=12, lmargin2=12)
         text_widget.tag_config("badge_user", background=_UI_COLORS["badge_user_bg"], foreground="white", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"))
         text_widget.tag_config("badge_agent", background=_ui_color(_UI_COLORS["badge_agent_bg"]), foreground="white", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"))
@@ -9173,7 +9190,9 @@ class App(ctk.CTk):
                 continue
             cells = [c.strip() for c in line.strip().strip('|').split('|')]
             if cells:
-                clean_cells = [cell.replace('**', '') for cell in cells]
+                # v2.5.3 (md): чистка ВСЕЙ инлайн-разметки — иначе скрытые маркеры
+                # (hide курсив/код по ячейкам) калечат колонку и сетка разъезжается
+                clean_cells = [_strip_md_marks(cell) for cell in cells]
                 parsed_rows.append(clean_cells)
 
         if not parsed_rows:
@@ -9366,13 +9385,18 @@ class App(ctk.CTk):
             text_widget.tag_add(f"h{level}", tk_start, tk_end)
             text_widget.tag_add("hide", tk_start, hash_end)
 
-        for match in re.finditer(r'\*\*(.*?)\*\*', raw_text):
+        # v2.5.3 (md): тройной ***жирный курсив*** + жирный **текст** в одном проходе.
+        # Важно: тройное попадает только в 1-ю альтернативу (содержимое без звёзд),
+        # поэтому сегмент всегда захватывается целиком и hide-экран точен.
+        for match in re.finditer(r'\*\*\*([^*\n]+?)\*\*\*|\*\*(.*?)\*\*', raw_text):
+            is_bi = match.group(1) is not None
+            skip = 3 if is_bi else 2
             m_start, m_end = match.start(), match.end()
             tk_start = f"{start_index} + {m_start} chars"
             tk_end = f"{start_index} + {m_end} chars"
-            tk_inner_start = f"{start_index} + {m_start + 2} chars"
-            tk_inner_end = f"{start_index} + {m_end - 2} chars"
-            text_widget.tag_add("bold", tk_inner_start, tk_inner_end)
+            tk_inner_start = f"{start_index} + {m_start + skip} chars"
+            tk_inner_end = f"{start_index} + {m_end - skip} chars"
+            text_widget.tag_add("bi" if is_bi else "bold", tk_inner_start, tk_inner_end)
             text_widget.tag_add("hide", tk_start, tk_inner_start)
             text_widget.tag_add("hide", tk_inner_end, tk_end)
 
@@ -9914,12 +9938,14 @@ class App(ctk.CTk):
                 run_sender.font.color.rgb = RGBColor(0, 102, 204) if role == "user" else RGBColor(0, 153, 76)
 
                 # v2.5.3: инлайн-разметка для экспорта (сохраняет оформление чата в Word):
-                # **жирный**, *курсив*, ~~зачёркнутый~~, `код`, <small>мелкий</small>, звёздочка-сноска
+                # **жирный**, ***жирный курсив***, *курсив*, ~~зачёркнутый~~, `код`, <small>мелкий</small>, звёздочка-сноска;
+                # маркеры СКРЫВАЮТСЯ из текста рунов (в файле не должно быть звёзд/тильд)
                 def add_md_runs(paragraph, text):
                     text = re.sub(r'\*(?=\s*$)', '<sup>*</sup>', text)
                     md_inline = re.compile(
                         r'(<sup>.*?</sup>)'
-                        r'|(~~.*?~~)'
+                        r'|(\*\*\*[^*\n]+?\*\*\*)'
+                        r'|(~~[^~\n]+?~~)'
                         r'|(\*\*.*?\*\*)'
                         r'|(\*[^*\n]+\*)'
                         r'|(`[^`\n]+`)'
@@ -9935,14 +9961,23 @@ class App(ctk.CTk):
                             continue
                         run = paragraph.add_run(part)
                         if lower.startswith('<small>') and lower.endswith('</small>'):
+                            run.text = part[7:-8]
                             run.font.size = Pt(9)
+                        elif part.startswith('***') and part.endswith('***') and len(part) > 6:
+                            run.text = part[3:-3]
+                            run.bold = True
+                            run.italic = True
                         elif part.startswith('~~') and part.endswith('~~') and len(part) > 4:
+                            run.text = part[2:-2]
                             run.font.strike = True
                         elif part.startswith('**') and part.endswith('**') and len(part) > 4:
+                            run.text = part[2:-2]
                             run.bold = True
                         elif part.startswith('*') and part.endswith('*') and len(part) > 2:
+                            run.text = part[1:-1]
                             run.italic = True
                         elif part.startswith('`') and part.endswith('`') and len(part) > 2:
+                            run.text = part[1:-1]
                             run.font.name = "Consolas"
                 
                 # ОЧИСТКА ОТ ШУМА АГЕНТА (БЕЗ глобальной замены <br>)
@@ -9968,9 +10003,9 @@ class App(ctk.CTk):
                         hdr_cells = table.rows[0].cells
                         for i, cell_text in enumerate(table_data[0]):
                             if i < cols:
-                                # ЛОКАЛЬНАЯ ОЧИСТКА: Меняем <br> на \n и убираем **
+                                # ЛОКАЛЬНАЯ ОЧИСТКА: Меняем <br> на \n и чистим инлайн-разметку ячеек
                                 cleaned_cell = re.sub(r'<br\s*/?>', '\n', cell_text, flags=re.IGNORECASE)
-                                hdr_cells[i].text = cleaned_cell.replace('**', '').strip()
+                                hdr_cells[i].text = _strip_md_marks(cleaned_cell).strip()
                                 # Сделаем заголовки жирными
                                 for paragraph in hdr_cells[i].paragraphs:
                                     for run in paragraph.runs:
@@ -9985,9 +10020,9 @@ class App(ctk.CTk):
                             row_cells = table.add_row().cells
                             for i, cell_text in enumerate(table_data[row_idx]):
                                 if i < cols:
-                                    # ЛОКАЛЬНАЯ ОЧИСТКА: Меняем <br> на \n и убираем **
+                                    # ЛОКАЛЬНАЯ ОЧИСТКА: Меняем <br> на \n и чистим инлайн-разметку ячеек
                                     cleaned_cell = re.sub(r'<br\s*/?>', '\n', cell_text, flags=re.IGNORECASE)
-                                    row_cells[i].text = cleaned_cell.replace('**', '').strip()
+                                    row_cells[i].text = _strip_md_marks(cleaned_cell).strip()
                     table_data.clear()
 
                 for line in clean_lines:
