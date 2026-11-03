@@ -36,6 +36,7 @@ import customtkinter as ctk
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import tkinter as tk
+import tkinter.font as tkfont
 import keyboard
 import openpyxl
 from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
@@ -104,6 +105,11 @@ _UI_COLORS = {
     "error_text":     ("#C62828", "#E06C75"),
     "warn_text":      ("#946200", "#E5C07B"),
     "ok_text":        ("#1E7A38", "#98c379"),
+    "icon_attach":    ("#90CAF9", "#64B5F6"),
+    "icon_mic":       "#EF9A9A",
+    "icon_note":      "#FFD54F",
+    "icon_edit":      "#FFD54F",
+    "icon_trash":     ("#F0B9B9", "#E88B8B"),
     "separator":      ("gray80", "gray35"),
 }
 
@@ -3620,7 +3626,7 @@ def transcribe_audio_logic(filename, app_instance):
     def log_progress(msg):
         if app_instance is not None:
             # Убран тег "agent_msg", чтобы не было серого фона
-            app_instance.after(0, lambda: app_instance.append_to_chat(f"  [Система: 🎙️ {msg}]\n"))
+            app_instance.after(0, lambda: app_instance.append_to_chat(f"  [Система: 🎙️ {msg}]\n", "system"))
 
     temp_dir = None
     try:
@@ -4899,7 +4905,7 @@ def sync_vector_db(self=None, run_xwiki=True):
             unique_audio = list(set(untranscribed_audio))
             display_names = ", ".join(unique_audio[:5]) + ("..." if len(unique_audio) > 5 else "")
             msg = f"\n[Система: ⚠️ В базе обнаружены нерасшифрованные аудиофайлы ({len(unique_audio)} шт.): {display_names}. Запустить транскрибацию?]\n\n"
-            self.after(0, lambda m=msg: self.append_to_chat(m))
+            self.after(0, lambda m=msg: self.append_to_chat(m, "system"))
 
         # Ретрай пропущенных: файл с ошибкой распознавания не «залипает» в состояниях
         # (покрыто инкрементальными сохранениями выше, D-2026-09-24-01)
@@ -7094,6 +7100,8 @@ class App(ctk.CTk):
         
         self.sidebar_frame = ctk.CTkFrame(self, width=200, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
+        # v2.5.3: сайдбар фиксированной ширины — длинные названия файлов при синхронизации не растягивают колонку
+        self.sidebar_frame.grid_propagate(False)
         # Делаем 5-ю строку резиновой, чтобы прижать нижние элементы
         self.sidebar_frame.grid_rowconfigure(5, weight=1)
         
@@ -7179,14 +7187,14 @@ class App(ctk.CTk):
         self.progress_bar.grid(row=9, column=0, padx=20, pady=(15, 4), sticky="ew")
         self.progress_bar.set(0)
 
-        self.file_progress_label = ctk.CTkLabel(self.sidebar_frame, text="Ожидание синхронизации", font=ctk.CTkFont(size=11))
+        self.file_progress_label = ctk.CTkLabel(self.sidebar_frame, text="Ожидание синхронизации", font=ctk.CTkFont(size=11), wraplength=160)
         self.file_progress_label.grid(row=10, column=0, padx=20, pady=(0, 6), sticky="w")
 
-        self.status_label = ctk.CTkLabel(self.sidebar_frame, text="Загрузка...", font=ctk.CTkFont(size=12))
+        self.status_label = ctk.CTkLabel(self.sidebar_frame, text="Загрузка...", font=ctk.CTkFont(size=12), wraplength=160)
         self.status_label.grid(row=11, column=0, padx=20, pady=(5, 15))
 
         # Индикатор прогресса построения графа связей (обновляется фоновым пауком)
-        self.graph_status_label = ctk.CTkLabel(self.sidebar_frame, text="", font=ctk.CTkFont(size=11), text_color=_UI_COLORS["info_text"])
+        self.graph_status_label = ctk.CTkLabel(self.sidebar_frame, text="", font=ctk.CTkFont(size=11), text_color=_UI_COLORS["info_text"], wraplength=160)
         self.graph_status_label.grid(row=12, column=0, padx=20, pady=(0, 10), sticky="w")
         
         self.chat_frame = ctk.CTkFrame(self)
@@ -7223,7 +7231,9 @@ class App(ctk.CTk):
         # v2.5.3: теги сообщений чата; dead-теги msg_id/role_user/role_agent/normal_text удалены,
         # добавлен тег system для системных сообщений ([Система: …], [⚠️ …], [⏹ …]);
         # цвета реактивно перекрашиваются при смене темы Windows (см. _apply_chat_tag_colors)
-        text_widget.tag_config("system", foreground=_ui_color(_UI_COLORS["system_text"]), font=("Segoe UI", 13, "italic"))
+        _chat_font = tkfont.Font(font=text_widget.cget("font"))
+        text_widget.tag_config("system", foreground=_ui_color(_UI_COLORS["system_text"]),
+                               font=(_chat_font.actual("family"), _chat_font.actual("size"), "italic"))
         text_widget.tag_config("badge_user", background=_UI_COLORS["badge_user_bg"], foreground="white", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"))
         text_widget.tag_config("badge_agent", background=_ui_color(_UI_COLORS["badge_agent_bg"]), foreground="white", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"))
         text_widget.tag_config("tool_call", foreground=_ui_color(_UI_COLORS["tool_call_text"]), font=ctk.CTkFont(family="Consolas", size=13, slant="italic"))
@@ -7265,14 +7275,16 @@ class App(ctk.CTk):
         # [0, 0] Кнопка прикрепления файлов (Скрепка)
         self.attach_button = ctk.CTkButton(
             buttons_frame, text="📎", width=40, height=36,
-            command=self.handle_attach_file, font=ctk.CTkFont(size=18)
+            command=self.handle_attach_file, font=ctk.CTkFont(family="Segoe UI Emoji", size=18),
+            text_color=_UI_COLORS["icon_attach"]
         )
         self.attach_button.grid(row=0, column=0, padx=2, pady=2)
 
         # [0, 1] Кнопка микрофона (Push-to-Talk) — только для админа
         self.record_btn = ctk.CTkButton(
             buttons_frame, text="🎤", width=40, height=36,
-            fg_color=_UI_COLORS["accent"], hover_color=_UI_COLORS["accent_hover"]
+            fg_color=_UI_COLORS["accent"], hover_color=_UI_COLORS["accent_hover"],
+            font=ctk.CTkFont(family="Segoe UI Emoji", size=18), text_color=_UI_COLORS["icon_mic"]
         )
         self.record_btn.grid(row=0, column=1, padx=2, pady=2)
         self.record_btn.bind('<ButtonPress-1>', self._on_record_start)
@@ -7281,7 +7293,8 @@ class App(ctk.CTk):
         # [1, 0] Промпт-мастер (конструктор запросов)
         self.prompt_master_btn = ctk.CTkButton(
             buttons_frame, text="📝", width=40, height=36,
-            command=self.open_prompt_master, font=ctk.CTkFont(size=18)
+            command=self.open_prompt_master, font=ctk.CTkFont(family="Segoe UI Emoji", size=18),
+            text_color=_UI_COLORS["icon_note"]
         )
         self.prompt_master_btn.grid(row=1, column=0, padx=2, pady=2)
 
@@ -8203,7 +8216,7 @@ class App(ctk.CTk):
         if self.current_role == "admin":
             self.current_role = "guest"
             self.update_ui_for_role()
-            self.append_to_chat("\n[Система: Режим администратора отключен. Текущая роль: Guest.]\n")
+            self.append_to_chat("\n[Система: Режим администратора отключен. Текущая роль: Guest.]\n", "system")
             return
 
         password_dialog = ctk.CTkInputDialog(text="Введите пароль администратора:", title="Авторизация")
@@ -8212,9 +8225,9 @@ class App(ctk.CTk):
         if entered_password == get_vault_data().get("admin_password", "admin"):
             self.current_role = "admin"
             self.update_ui_for_role()
-            self.append_to_chat("\n[Система: Успешная авторизация. Текущая роль: Admin.]\n")
+            self.append_to_chat("\n[Система: Успешная авторизация. Текущая роль: Admin.]\n", "system")
         else:
-            self.append_to_chat("\n[Система: Неверный пароль. Доступ Admin отклонен.]\n")
+            self.append_to_chat("\n[Система: Неверный пароль. Доступ Admin отклонен.]\n", "system")
 
     def update_ui_for_role(self):
         is_admin = self.current_role == "admin"
@@ -9228,7 +9241,9 @@ class App(ctk.CTk):
             tw.tag_config("h6", foreground=heading_fg)
             tw.tag_config("hr", foreground=_ui_color(_UI_COLORS["hr_text"]))
             tw.tag_config("hyperlink", foreground=_ui_color(_UI_COLORS["link"]), underline=True)
-            tw.tag_config("system", foreground=_ui_color(_UI_COLORS["system_text"]))
+            _chat_font = tkfont.Font(font=tw.cget("font"))
+            tw.tag_config("system", foreground=_ui_color(_UI_COLORS["system_text"]),
+                          font=(_chat_font.actual("family"), _chat_font.actual("size"), "italic"))
             tw.tag_config("tool_call", foreground=_ui_color(_UI_COLORS["tool_call_text"]))
             tw.tag_config("badge_agent", background=_ui_color(_UI_COLORS["badge_agent_bg"]), foreground="white")
             tw.tag_config("attachment_link", foreground=_ui_color(_UI_COLORS["link"]), underline=True)
@@ -9377,16 +9392,16 @@ class App(ctk.CTk):
                 safe_filename = f"СМК_Чтение_{base_name}"
                 safe_path = os.path.join(tempfile.gettempdir(), safe_filename)
                 shutil.copy2(target_file, safe_path)
-                self.append_to_chat(f"\n[Система: Guest-режим. Открываем безопасную копию: '{safe_path}']\n")
+                self.append_to_chat(f"\n[Система: Guest-режим. Открываем безопасную копию: '{safe_path}']\n", "system")
                 os.startfile(os.path.abspath(safe_path))
             else:
-                self.append_to_chat(f"\n[Система: Admin-режим. Открываем оригинал файла '{resolved_name}']\n")
+                self.append_to_chat(f"\n[Система: Admin-режим. Открываем оригинал файла '{resolved_name}']\n", "system")
                 os.startfile(os.path.abspath(target_file))
         else:
             err = f"[Система: Файл '{filename}' не найден в разрешенных директориях]\n"
             if suggestions:
                 err = f"[Система: Файл '{filename}' не найден в разрешенных директориях. Ближайшие совпадения: {'; '.join(suggestions)}]\n"
-            self.append_to_chat(err)
+            self.append_to_chat(err, "system")
     
     def load_history(self):
         try:
@@ -9498,11 +9513,11 @@ class App(ctk.CTk):
             if window_to_close is not None:
                 window_to_close.destroy()
 
-            self.append_to_chat(f"\n[Система: Загружена сессия '{self.session_title}']\n")
+            self.append_to_chat(f"\n[Система: Загружена сессия '{self.session_title}']\n", "system")
             # Подсвечиваем ссылки во всей загруженной истории
             self.highlight_attachments()
         except Exception as e:
-            self.append_to_chat(f"\n[Система: Ошибка загрузки сессии: {e}]\n")
+            self.append_to_chat(f"\n[Система: Ошибка загрузки сессии: {e}]\n", "system")
 
     def rename_chat_session(self, file_path, session_id, current_title):
         dialog = ctk.CTkInputDialog(text="Введите новое название чата (макс. 35 символов):", title="Переименовать чат")
@@ -9535,7 +9550,7 @@ class App(ctk.CTk):
                     self.after(100, self.open_history_window)
                     
             except Exception as e:
-                self.append_to_chat(f"\n[Система: Ошибка переименования чата: {e}]\n")
+                self.append_to_chat(f"\n[Система: Ошибка переименования чата: {e}]\n", "system")
 
     def open_history_window(self):
         history_window = ctk.CTkToplevel(self)
@@ -9561,7 +9576,7 @@ class App(ctk.CTk):
                 if os.path.exists(file_path):
                     os.remove(file_path)
             except Exception as e:
-                self.append_to_chat(f"\n[Система: Ошибка удаления файла сессии: {e}]\n")
+                self.append_to_chat(f"\n[Система: Ошибка удаления файла сессии: {e}]\n", "system")
                 return
 
             try:
@@ -9619,6 +9634,8 @@ class App(ctk.CTk):
                 width=40,
                 fg_color=_UI_COLORS["muted_btn"],
                 hover_color=_UI_COLORS["muted_btn_hover"],
+                font=ctk.CTkFont(family="Segoe UI Emoji", size=14),
+                text_color=_UI_COLORS["icon_edit"],
                 command=lambda fp=file_path, session_id=sid, ctitle=title: self.rename_chat_session(fp, session_id, ctitle)
             ).pack(side="right", padx=(0, 4), pady=8)
 
@@ -9628,6 +9645,8 @@ class App(ctk.CTk):
                 width=40,
                 fg_color=_UI_COLORS["danger"],
                 hover_color=_UI_COLORS["danger_hover"],
+                font=ctk.CTkFont(family="Segoe UI Emoji", size=14),
+                text_color=_UI_COLORS["icon_trash"],
                 command=lambda fp=file_path, session_id=sid, rf=row_frame: delete_session(fp, session_id, rf)
             ).pack(side="right", padx=(0, 0), pady=8)
 
@@ -9703,7 +9722,7 @@ class App(ctk.CTk):
             client = chromadb.PersistentClient(path=get_db_path())
             collection = client.get_or_create_collection(name="temp_chat_memory", embedding_function=get_cloud_ef())
             collection.delete(where={"session_id": self.current_session_id})
-            self.append_to_chat("\n[СИСТЕМА: Ваш личный архив диалога очищен]\n\n")
+            self.append_to_chat("\n[СИСТЕМА: Ваш личный архив диалога очищен]\n\n", "system")
         except:
             pass # Если коллекции еще нет, игнорируем
 
@@ -12805,7 +12824,7 @@ class App(ctk.CTk):
                         # Выводим аккуратный лог действия с отступом, БЕЗ дублирования бейджа
                         self.after(0, self.append_to_chat, f"  ⚙️ [Действие: {func_name}]...\n", "tool_call")
                         if func_name == "execute_python_code":
-                            self.after(0, lambda: self.append_to_chat("\n[⏳ Агент выполняет Python-код: анализ данных и обработка файлов...]\n"))
+                            self.after(0, lambda: self.append_to_chat("\n[⏳ Агент выполняет Python-код: анализ данных и обработка файлов...]\n", "system"))
                             self.after(0, self.update_idletasks)
 
                         # Особая обработка поиска по базе знаний: поддержка Rerank (Advanced RAG)
@@ -12854,9 +12873,9 @@ class App(ctk.CTk):
                                   self.current_settings.get("admin_model" if getattr(self, "current_role", "guest") == "admin" else "guest_model", ""),
                                   _mask_secrets(e))
                     if "context_length_exceeded" in error_str or "maximum context length" in error_str or "400" in error_str:
-                        self.append_to_chat("\n[⚠️ Ошибка: Объем прикрепленных файлов превышает лимит памяти нейросети. Пожалуйста, удалите часть файлов или разбейте документ на части.]\n\n")
+                        self.append_to_chat("\n[⚠️ Ошибка: Объем прикрепленных файлов превышает лимит памяти нейросети. Пожалуйста, удалите часть файлов или разбейте документ на части.]\n\n", "system")
                     else:
-                        self.append_to_chat(f"\n[Критическая ошибка Агента: {str(e)}]\n\n")
+                        self.append_to_chat(f"\n[Критическая ошибка Агента: {str(e)}]\n\n", "system")
                     self.save_current_session()
                     break
             else:
@@ -12992,7 +13011,7 @@ class App(ctk.CTk):
             log_llm.error("_agent_finalize: ошибка финализации (%s): %s",
                           _classify_net_error(finalize_err), _mask_secrets(finalize_err))
             try:
-                self.append_to_chat(f"\n[⚠️ Ошибка финализации ({reason}): {finalize_err}. Выше — механическая сводка собранных данных.]\n\n")
+                self.append_to_chat(f"\n[⚠️ Ошибка финализации ({reason}): {finalize_err}. Выше — механическая сводка собранных данных.]\n\n", "system")
                 self.chat_history.append({"role": "assistant", "content": f"⏹ {reason}. Финализация не удалась: {finalize_err}", "_msg_id": agent_msg_id})
                 self.save_history()
                 self.save_current_session()
