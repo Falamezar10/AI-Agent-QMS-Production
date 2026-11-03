@@ -7252,7 +7252,8 @@ class App(ctk.CTk):
         text_widget.tag_config("strike", font=tkfont.Font(**_base_args, overstrike=True))
         text_widget.tag_config("code_inline", font=tkfont.Font(family="Consolas", size=_chat_font.actual("size")),
                                background=_ui_color(_UI_COLORS["code_bg"]))
-        text_widget.tag_config("small", font=tkfont.Font(**_base_args, size=max(8, _chat_font.actual("size") - 2)))
+        text_widget.tag_config("small", font=tkfont.Font(family=_base_args["family"],
+                                size=max(8, _chat_font.actual("size") - 2)))
         text_widget.tag_config("quote", foreground=_ui_color(_UI_COLORS["system_text"]), lmargin1=12, lmargin2=12)
         text_widget.tag_config("badge_user", background=_UI_COLORS["badge_user_bg"], foreground="white", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"))
         text_widget.tag_config("badge_agent", background=_ui_color(_UI_COLORS["badge_agent_bg"]), foreground="white", font=ctk.CTkFont(family="Segoe UI", size=14, weight="bold"))
