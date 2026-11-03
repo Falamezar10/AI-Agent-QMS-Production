@@ -11549,8 +11549,8 @@ class App(ctk.CTk):
         auto_check = ctk.CTkCheckBox(filter_frame, text="Автообновление (3 с)", variable=auto_var)
         auto_check.pack(side="left", padx=(0, 10))
 
-        self._icon_button(filter_frame, "sync_db", "Обновить", refresh, width=110).pack(side="left", padx=5)
-        self._icon_button(filter_frame, "folder", "Открыть папку логов", _open_log_dir, width=170).pack(side="left", padx=5)
+        self._icon_button(filter_frame, "sync_db", "Обновить", lambda: refresh(), width=110).pack(side="left", padx=5)
+        self._icon_button(filter_frame, "folder", "Открыть папку логов", lambda: _open_log_dir(), width=170).pack(side="left", padx=5)
 
         textbox = ctk.CTkTextbox(win, wrap="none", font=ctk.CTkFont(family="Consolas", size=12))
         textbox.pack(fill="both", expand=True, padx=10, pady=(5, 10))
