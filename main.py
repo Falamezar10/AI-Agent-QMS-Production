@@ -111,6 +111,7 @@ _UI_COLORS = {
     "icon_edit":      "#FFD54F",
     "icon_trash":     ("#F0B9B9", "#E88B8B"),
     "code_bg":        ("gray85", "gray17"),
+    "codecard_bg":    ("gray86", "gray13"),
     "separator":      ("gray80", "gray35"),
 }
 
@@ -7008,6 +7009,12 @@ def _strip_md_marks(text):
     return text
 
 
+# v2.7.0 (md v2): блочный код в тройных бэктиках. Открытие — строка «```язык», закрытие —
+# строка «```». Незакрытый блок НЕ матчится (поток ещё не дошёл до закрытия — финальный
+# проход разметит; разметка идемпотентна: маркеры остаются в тексте под тегом hide).
+_MD_FENCE_RE = re.compile(r'(?ms)^```[^\n]*\n.*?^```[ \t]*$')
+
+
 def _hover_tip(widget, text):
     """Всплывающая подсказка при наведении курсора: показ через 600 мс, скрытие при уходе/клике."""
     state = {"after": None, "tip": None}
@@ -7299,6 +7306,10 @@ class App(ctk.CTk):
         text_widget.tag_config("strike", font=tkfont.Font(**_base_args, overstrike=True))
         text_widget.tag_config("code_inline", font=tkfont.Font(family="Consolas", size=_chat_font.actual("size")),
                                background=_ui_color(_UI_COLORS["code_bg"]))
+        # v2.7.0 (md v2): блочные код-карточки — моноширинное тело с подложкой и отступами
+        text_widget.tag_config("codecard", font=tkfont.Font(family="Consolas", size=_chat_font.actual("size")),
+                               background=_ui_color(_UI_COLORS["codecard_bg"]),
+                               lmargin1=12, lmargin2=12, rmargin=12, spacing1=4, spacing3=4)
         text_widget.tag_config("small", font=tkfont.Font(family=_base_args["family"],
                                 size=max(8, _chat_font.actual("size") - 2)))
         # v2.5.3 (md): тройной ***жирный курсив*** — свой тег (объявлен после bold/italic — выше их приоритет)
@@ -8063,12 +8074,72 @@ class App(ctk.CTk):
         except Exception as e:
             print(f"Промпт-мастер: ошибка сохранения шаблонов: {e}")
 
+    def _open_tpl_window(self, title, size_key, default_size, min_size=None):
+        """v2.7.0 (UI 2.0): единый шаблон диалоговых окон. Размер И позиция
+        восстанавливаются из local_settings.json (ключ win_geom_<size_key>; неизвестные
+        ключи переживают как загрузку, так и любые полносоставные сохранения,
+        поэтому DEFAULT_LOCAL_SETTINGS не расширяется — читается через .get с fallback).
+        При первом запуске — размер по умолчанию с центрированием относительно главного
+        окна. Геометрия применяется ДО deiconify — окно не мигает заводским размером.
+        Геометрия пишется ЗДЕСЬ (при закрытии окна), save() настроек не тронут."""
+        try:
+            win = ctk.CTkToplevel(self)
+            win.title(title)
+            geom_key = f"win_geom_{size_key}"
+            _geom_re = re.compile(r'^\d{2,}x\d{2,}[+-]\d+[+-]\d+$')
+            saved = None
+            try:
+                saved = self.current_settings.get(geom_key)
+            except Exception:
+                saved = None
+            if isinstance(saved, str) and _geom_re.match(saved):
+                try:
+                    win.geometry(saved)
+                except Exception:
+                    win.geometry(default_size)
+            else:
+                # Первый запуск: дефолтный размер, центрирование относительно главного окна
+                try:
+                    dw, dh = (int(v) for v in default_size.split("x"))
+                    self.update_idletasks()
+                    rx = self.winfo_x() + max(0, (self.winfo_width() - dw) // 2)
+                    ry = self.winfo_y() + max(0, (self.winfo_height() - dh) // 2)
+                    win.geometry(f"{default_size}+{rx}+{ry}")
+                except Exception:
+                    win.geometry(default_size)
+            win.resizable(True, True)
+            try:
+                if min_size:
+                    win.minsize(int(min_size[0]), int(min_size[1]))
+            except Exception:
+                pass
+            win.transient(self)
+
+            def _save_window_geometry(event=None):
+                if event is not None and event.widget is not win:
+                    return
+                try:
+                    g = win.winfo_geometry()
+                    if isinstance(g, str) and _geom_re.match(g):
+                        self.current_settings[geom_key] = g
+                        save_local_settings(self.current_settings)
+                except Exception:
+                    pass
+
+            win.bind("<Destroy>", _save_window_geometry)
+            return win
+        except Exception as e:
+            log_ui.warning("Окно «%s» открыто без шаблона геометрии (ошибка: %s)", title, e)
+            win = ctk.CTkToplevel(self)
+            win.title(title)
+            win.geometry(default_size)
+            win.resizable(True, True)
+            win.transient(self)
+            return win
+
     def open_prompt_master(self):
         """Открывает модальное окно Промпт-мастера для конструирования запросов."""
-        window = ctk.CTkToplevel(self)
-        window.title("📝 Промпт-мастер")
-        window.geometry("700x700")
-        window.resizable(True, True)
+        window = self._open_tpl_window("📝 Промпт-мастер", "prompt_master", "700x700", (620, 520))
         window.grab_set()  # Делает окно модальным (не блокирует основной цикл)
 
         window.grid_columnconfigure(0, weight=1)
@@ -8076,7 +8147,7 @@ class App(ctk.CTk):
 
         # ── Верхняя панель: шаблоны ──────────────────────────────────────────
         top_panel = ctk.CTkFrame(window, fg_color="transparent")
-        top_panel.grid(row=0, column=0, padx=12, pady=(12, 0), sticky="ew")
+        top_panel.grid(row=0, column=0, padx=16, pady=(12, 0), sticky="ew")
         top_panel.grid_columnconfigure(0, weight=1)
 
         ctk.CTkLabel(top_panel, text="Шаблон:").grid(row=0, column=0, sticky="w", padx=(0, 6))
@@ -8100,7 +8171,7 @@ class App(ctk.CTk):
 
         # ── Прокручиваемая форма ──────────────────────────────────────────────
         scroll_frame = ctk.CTkScrollableFrame(window, label_text="Параметры запроса")
-        scroll_frame.grid(row=1, column=0, padx=12, pady=8, sticky="nsew")
+        scroll_frame.grid(row=1, column=0, padx=16, pady=12, sticky="nsew")
         scroll_frame.grid_columnconfigure(0, weight=1)
 
         fields = {}  # Словарь {ключ: виджет}
@@ -8159,7 +8230,7 @@ class App(ctk.CTk):
 
         # ── Нижняя панель ────────────────────────────────────────────────────
         bottom_panel = ctk.CTkFrame(window, fg_color="transparent")
-        bottom_panel.grid(row=2, column=0, padx=12, pady=(0, 12), sticky="ew")
+        bottom_panel.grid(row=2, column=0, padx=16, pady=(0, 12), sticky="ew")
         bottom_panel.grid_columnconfigure(0, weight=1)
 
         error_label = ctk.CTkLabel(bottom_panel, text="", text_color=_UI_COLORS["error_text"], anchor="w")
@@ -9429,6 +9500,7 @@ class App(ctk.CTk):
             tw.tag_config("system", foreground=_ui_color(_UI_COLORS["system_text"]),
                           font=(_chat_font.actual("family"), _chat_font.actual("size"), "italic"))
             tw.tag_config("code_inline", background=_ui_color(_UI_COLORS["code_bg"]))
+            tw.tag_config("codecard", background=_ui_color(_UI_COLORS["codecard_bg"]))
             tw.tag_config("quote", foreground=_ui_color(_UI_COLORS["system_text"]), lmargin1=12, lmargin2=12)
             tw.tag_config("tool_call", foreground=_ui_color(_UI_COLORS["tool_call_text"]))
             tw.tag_config("badge_agent", background=_ui_color(_UI_COLORS["badge_agent_bg"]), foreground="white")
@@ -9446,6 +9518,32 @@ class App(ctk.CTk):
 
         raw_text = text_widget.get(start_index, end_index)
 
+        # v2.7.0 (md v2): ПЕРВЫЙ этап — блочные код-карточки. Делимитеры («``` + язык» /
+        # «```) прячутся тегом hide (маркеры физически остаются в тексте — повторная
+        # разметка идемпотентна), тело получает тег codecard. Теги клеятся ДО мутаций —
+        # Tk сам двигает границы тегов при последующих delete/insert.
+        for m in list(_MD_FENCE_RE.finditer(raw_text)):
+            open_start = m.start()
+            nl = raw_text.find("\n", open_start)
+            if nl < 0:
+                continue
+            close_start = raw_text.rfind("```", nl + 1, m.end())
+            if close_start <= open_start:
+                continue
+            tk_o = f"{start_index} + {open_start} chars"
+            tk_b = f"{start_index} + {nl + 1} chars"
+            tk_c = f"{start_index} + {close_start} chars"
+            tk_e = f"{start_index} + {m.end()} chars"
+            text_widget.tag_add("codecard", tk_o, tk_e)
+            text_widget.tag_add("hide", tk_o, tk_b)
+            text_widget.tag_add("hide", tk_c, tk_e)
+
+        # v2.7.0 (md v2): «заморозка» — внутри код-блоков (codecard+hide) стилевые
+        # проходы ничего не трогают. Диапазоны ПЕРЕСЧИТЫВАЮТСЯ под текущий текст на
+        # каждом мутац. проходе: замены до/после сдвигают смещения.
+        def _in_code_block(m_start, m_end, spans):
+            return any(m_start < pe and m_end > ps for (ps, pe) in spans)
+
         # v2.5.3 (md): текстовые замены ДО стилевых проходов (идемпотентны: повторный проход не находит маркеров)
         for pattern in (
             r'(\s*)- \[(?:x|X)\] ',   # чек-лист выполнено
@@ -9453,7 +9551,10 @@ class App(ctk.CTk):
             r'(?m)^(\s*)- ',          # маркеры списков
             r'(?m)^> ?',              # цитаты
         ):
+            spans = [(mm.start(), mm.end()) for mm in _MD_FENCE_RE.finditer(raw_text)]
             for m in list(re.finditer(pattern, raw_text))[::-1]:
+                if _in_code_block(m.start(), m.end(), spans):
+                    continue
                 tk_start = f"{start_index} + {m.start()} chars"
                 tk_end = f"{start_index} + {m.end()} chars"
                 text_widget.delete(tk_start, tk_end)
@@ -9463,7 +9564,10 @@ class App(ctk.CTk):
                     text_widget.insert(tk_start, "│  ")
             raw_text = text_widget.get(start_index, self.chat_textbox.index("end-1c"))
         # Разделитель --- → настоящая линия
+        spans = [(mm.start(), mm.end()) for mm in _MD_FENCE_RE.finditer(raw_text)]
         for m in list(re.finditer(r'(?m)^-{3,}\s*$', raw_text))[::-1]:
+            if _in_code_block(m.start(), m.end(), spans):
+                continue
             tk_start = f"{start_index} + {m.start()} chars"
             tk_end = f"{start_index} + {m.end()} chars"
             text_widget.delete(tk_start, tk_end)
@@ -9473,8 +9577,11 @@ class App(ctk.CTk):
         end_index = self.chat_textbox.index("end-1c")
 
         table_matches = list(re.finditer(r'(^[ \t]*\|.*\|[ \t]*(\n|$))+', raw_text, re.MULTILINE))
+        spans = [(mm.start(), mm.end()) for mm in _MD_FENCE_RE.finditer(raw_text)]
 
         for match in reversed(table_matches):
+            if _in_code_block(match.start(), match.end(), spans):
+                continue
             raw_table = match.group(0)
             unicode_table = self.generate_unicode_table(raw_table, max_chars=calculated_max_chars)
 
@@ -9491,7 +9598,13 @@ class App(ctk.CTk):
         end_index = self.chat_textbox.index("end-1c")
         raw_text = text_widget.get(start_index, end_index)
 
+        # Стилевые проходы текст не мутируют — «заморозка» считается один раз и
+        # валидна для всех проходов ниже (v2.7.0, md v2).
+        spans = [(mm.start(), mm.end()) for mm in _MD_FENCE_RE.finditer(raw_text)]
+
         for match in re.finditer(r'^(#{1,6})\s+(.*?)$', raw_text, re.MULTILINE):
+            if _in_code_block(match.start(), match.end(), spans):
+                continue
             hashes = match.group(1)
             level = len(hashes)
             m_start, m_end = match.start(), match.end()
@@ -9505,6 +9618,8 @@ class App(ctk.CTk):
         # Важно: тройное попадает только в 1-ю альтернативу (содержимое без звёзд),
         # поэтому сегмент всегда захватывается целиком и hide-экран точен.
         for match in re.finditer(r'\*\*\*([^*\n]+?)\*\*\*|\*\*(.*?)\*\*', raw_text):
+            if _in_code_block(match.start(), match.end(), spans):
+                continue
             is_bi = match.group(1) is not None
             skip = 3 if is_bi else 2
             m_start, m_end = match.start(), match.end()
@@ -9518,6 +9633,8 @@ class App(ctk.CTk):
 
         # v2.5.3 (md): зачёркнутый ~~текст~~
         for match in re.finditer(r'~~([^~\n]+?)~~', raw_text):
+            if _in_code_block(match.start(), match.end(), spans):
+                continue
             m_start, m_end = match.start(), match.end()
             tk_start = f"{start_index} + {m_start} chars"
             tk_end = f"{start_index} + {m_end} chars"
@@ -9529,6 +9646,8 @@ class App(ctk.CTk):
 
         # v2.5.3 (md): курсив *текст* (после жирного; пары только внутри одной строки)
         for match in re.finditer(r'(?<!\*)\*(?!\*)([^*\n]+?)\*(?!\*)', raw_text):
+            if _in_code_block(match.start(), match.end(), spans):
+                continue
             m_start, m_end = match.start(), match.end()
             tk_start = f"{start_index} + {m_start} chars"
             tk_end = f"{start_index} + {m_end} chars"
@@ -9540,6 +9659,8 @@ class App(ctk.CTk):
 
         # v2.5.3 (md): inline-код `текст`
         for match in re.finditer(r'`([^`\n]+)`', raw_text):
+            if _in_code_block(match.start(), match.end(), spans):
+                continue
             m_start, m_end = match.start(), match.end()
             tk_start = f"{start_index} + {m_start} chars"
             tk_end = f"{start_index} + {m_end} chars"
@@ -9551,6 +9672,8 @@ class App(ctk.CTk):
 
         # v2.5.3 (md): мелкий шрифт <small>…</small>
         for match in re.finditer(r'(?i)<small>(.*?)</small>', raw_text):
+            if _in_code_block(match.start(), match.end(), spans):
+                continue
             m_start, m_end = match.start(), match.end()
             tk_start = f"{start_index} + {m_start} chars"
             tk_end = f"{start_index} + {m_end} chars"
@@ -9562,24 +9685,32 @@ class App(ctk.CTk):
 
         # v2.5.3 (md): звёздочка-сноска в конце строки
         for match in re.finditer(r'\*(?=\s*$)', raw_text):
+            if _in_code_block(match.start(), match.end(), spans):
+                continue
             tk_start = f"{start_index} + {match.start()} chars"
             tk_end = f"{start_index} + {match.end()} chars"
             text_widget.tag_add("small", tk_start, tk_end)
 
         # v2.5.3 (md): цитата-блок «│  …» — строка целиком приглушённым курсивом с отступом
         for match in re.finditer(r'(?m)^│  .*$', raw_text):
+            if _in_code_block(match.start(), match.end(), spans):
+                continue
             tk_start = f"{start_index} + {match.start()} chars"
             tk_end = f"{start_index} + {match.end()} chars"
             text_widget.tag_add("quote", tk_start, tk_end)
 
         # v2.5.3 (md): цитатный блок «│  …» — строка целиком приглушённым курсивом с отступом
         for match in re.finditer(r'(?m)^│  .*$', raw_text):
+            if _in_code_block(match.start(), match.end(), spans):
+                continue
             tk_start = f"{start_index} + {match.start()} chars"
             tk_end = f"{start_index} + {match.end()} chars"
             text_widget.tag_add("quote", tk_start, tk_end)
 
         # 4. Ссылки (Улучшенная "всеядная" регулярка)
         for match in re.finditer(r'\[(?:Из файла|Файл)[:\s]*([^\]]+)\]', raw_text, re.IGNORECASE):
+            if _in_code_block(match.start(), match.end(), spans):
+                continue
             m_start, m_end = match.start(), match.end()
             filename = match.group(1).strip()
             tk_start = f"{start_index} + {m_start} chars"
@@ -9592,6 +9723,8 @@ class App(ctk.CTk):
 
         # 5. Веб-ссылки (http/https)
         for match in re.finditer(r'(https?://[a-zA-Z0-9_/%.-]+)', raw_text):
+            if _in_code_block(match.start(), match.end(), spans):
+                continue
             m_start, m_end = match.start(), match.end()
             url = match.group(1).strip()
             tk_start = f"{start_index} + {m_start} chars"
@@ -9827,14 +9960,11 @@ class App(ctk.CTk):
                 self.append_to_chat(f"\n[Система: Ошибка переименования чата: {e}]\n", "system")
 
     def open_history_window(self):
-        history_window = ctk.CTkToplevel(self)
-        history_window.title("История диалогов")
-        history_window.geometry("600x400")
-        history_window.transient(self)
+        history_window = self._open_tpl_window("История диалогов", "history", "600x400", (420, 300))
         history_window.grab_set()
 
         scrollable = ctk.CTkScrollableFrame(history_window)
-        scrollable.pack(fill="both", expand=True, padx=12, pady=12)
+        scrollable.pack(fill="both", expand=True, padx=16, pady=12)
 
         session_files = sorted(
             glob.glob(os.path.join(get_local_path(), "Sessions", "*.json")),
@@ -10007,6 +10137,9 @@ class App(ctk.CTk):
         from docx import Document
         from docx.shared import Pt, RGBColor
         from docx.enum.text import WD_ALIGN_PARAGRAPH
+        # v2.7.0 (md v2): светлая заливка абзацев код-блока (oxml w:shd)
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
         
         if not getattr(self, "chat_history", []):
             print("История чата пуста. Нечего экспортировать.")
@@ -10106,6 +10239,7 @@ class App(ctk.CTk):
                 
                 # 3. Микро-парсер Markdown (Текст и Таблицы)
                 in_table = False
+                in_code_block = False
                 table_data = []
                 
                 def flush_table():
@@ -10143,7 +10277,34 @@ class App(ctk.CTk):
 
                 for line in clean_lines:
                     line_stripped = line.strip()
-                    
+
+                    # v2.7.0 (md v2): блок кода в тройных бэктиках — Consolas + светлая
+                    # заливка абзаца. Содержимое кода выводится ЧИСТЫМ текстом
+                    # (inline-разметка внутри кода не интерпретируется), делимитеры
+                    # (```+язык / ```) в файл не попадают.
+                    if line_stripped.startswith('```'):
+                        in_code_block = not in_code_block
+                        continue
+                    if in_code_block:
+                        if in_table:
+                            flush_table()
+                            in_table = False
+                        if not line_stripped:
+                            continue
+                        p = doc.add_paragraph()
+                        try:
+                            pPr = p._p.get_or_add_pPr()
+                            shd = OxmlElement('w:shd')
+                            shd.set(qn('w:val'), 'clear')
+                            shd.set(qn('w:fill'), 'F2F2F2')
+                            pPr.append(shd)
+                            p.paragraph_format.left_indent = Pt(6)
+                        except Exception:
+                            p.paragraph_format.left_indent = Pt(12)
+                        code_run = p.add_run(line)
+                        code_run.font.name = "Consolas"
+                        continue
+
                     # Проверка на таблицу (начинается и заканчивается на |)
                     if line_stripped.startswith('|') and line_stripped.endswith('|'):
                         in_table = True
@@ -10255,14 +10416,11 @@ class App(ctk.CTk):
         threading.Thread(target=do_sync, daemon=True).start()
 
     def open_settings(self):
-        settings_window = ctk.CTkToplevel(self)
-        settings_window.title("Настройки Агента СМК")
-        settings_window.geometry("980x920")
-        settings_window.transient(self)
+        settings_window = self._open_tpl_window("Настройки Агента СМК", "settings", "980x920", (900, 800))
         settings_window.grab_set()
 
         tabview = ctk.CTkTabview(settings_window)
-        tabview.pack(padx=20, pady=10, fill="both", expand=True)
+        tabview.pack(padx=16, pady=12, fill="both", expand=True)
 
         tab_models = tabview.add("Модели")
         tab_excludes = tabview.add("Исключения")
@@ -11617,11 +11775,8 @@ class App(ctk.CTk):
         memory_dir = os.path.join(get_base_path(), "Memory")
         memory_file = os.path.join(memory_dir, "agent_memory.md")
 
-        win = ctk.CTkToplevel(self)
+        win = self._open_tpl_window("Управление памятью агента", "memory", "920x640", (700, 420))
         self._memory_window = win
-        win.title("Управление памятью агента")
-        win.geometry("920x640")
-        win.transient(self)
 
         # Состояние окна: mtime файла на момент загрузки, снапшот текста, флаг двухшагового подтверждения
         state = {"mtime": None, "snapshot": "", "confirm": None}
@@ -11642,13 +11797,13 @@ class App(ctk.CTk):
         status_label = ctk.CTkLabel(win, text="", font=ctk.CTkFont(size=12), justify="left", anchor="w")
 
         toolbar = ctk.CTkFrame(win, fg_color="transparent")
-        toolbar.pack(fill="x", padx=10, pady=(10, 2))
+        toolbar.pack(fill="x", padx=16, pady=(12, 2))
 
         toolbar2 = ctk.CTkFrame(win, fg_color="transparent")
-        toolbar2.pack(fill="x", padx=10, pady=(2, 2))
-        status_label.pack(fill="x", padx=10)
+        toolbar2.pack(fill="x", padx=16, pady=(2, 2))
+        status_label.pack(fill="x", padx=16)
         # Редактор — последним: pack уходит вниз и забирает всё остальное место
-        textbox.pack(fill="both", expand=True, padx=10, pady=(2, 10))
+        textbox.pack(fill="both", expand=True, padx=16, pady=(2, 12))
 
         def _set_status(msg, color=None):
             if color:
@@ -11824,13 +11979,10 @@ class App(ctk.CTk):
     def open_log_viewer(self):
         """Окно просмотра логов: хвост файла, фильтры по уровню/модулю, автообновление раз в 3 сек."""
         import collections
-        win = ctk.CTkToplevel(self)
-        win.title("Логи Агента СМК")
-        win.geometry("900x600")
-        win.transient(self)
+        win = self._open_tpl_window("Логи Агента СМК", "logs", "900x600")
 
         filter_frame = ctk.CTkFrame(win, fg_color="transparent")
-        filter_frame.pack(fill="x", padx=10, pady=(10, 5))
+        filter_frame.pack(fill="x", padx=16, pady=(12, 5))
 
         ctk.CTkLabel(filter_frame, text="Уровень:").pack(side="left", padx=(0, 4))
         level_var = ctk.StringVar(value="ВСЕ")
@@ -11855,7 +12007,7 @@ class App(ctk.CTk):
         self._icon_button(filter_frame, "folder", "Открыть папку логов", lambda: _open_log_dir(), width=170).pack(side="left", padx=5)
 
         textbox = ctk.CTkTextbox(win, wrap="none", font=ctk.CTkFont(family="Consolas", size=12))
-        textbox.pack(fill="both", expand=True, padx=10, pady=(5, 10))
+        textbox.pack(fill="both", expand=True, padx=16, pady=(5, 12))
         textbox.configure(state="disabled")
 
         def _open_log_dir():
@@ -11906,16 +12058,13 @@ class App(ctk.CTk):
     # ==================== ДИАГНОСТИКА ====================
     def run_diagnostics(self):
         """Кнопка Диагностика: окно отчёта + фоновый поток с проверками (прокси/OpenRouter/БД)."""
-        win = ctk.CTkToplevel(self)
-        win.title("Диагностика Агента СМК")
-        win.geometry("780x520")
-        win.transient(self)
+        win = self._open_tpl_window("Диагностика Агента СМК", "diagnostics", "780x520")
 
         header = ctk.CTkLabel(win, text="🩺 Диагностика: выполняются проверки...", font=ctk.CTkFont(weight="bold"))
-        header.pack(pady=(10, 5))
+        header.pack(pady=(12, 5))
 
         textbox = ctk.CTkTextbox(win, wrap="word", font=ctk.CTkFont(family="Consolas", size=12))
-        textbox.pack(fill="both", expand=True, padx=10, pady=(5, 10))
+        textbox.pack(fill="both", expand=True, padx=16, pady=(5, 12))
         textbox.configure(state="disabled")
 
         def report(line):
