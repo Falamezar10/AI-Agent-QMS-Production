@@ -1,6 +1,6 @@
 # ИИ-Агент СМК
 
-**Версия:** v2.0.0 Enterprise
+**Версия:** v2.7.2 Enterprise
 **Назначение:** Автономный RAG-Агент (Agentic AI Framework) для Системы Менеджмента Качества (СМК) предприятия.
 
 Агент работает по агентной архитектуре с **Tool Calling** (вместо жёсткого роутинга `if/elif`), опирается на единую базу знаний, файловую память и проактивный журнал. Все ответы проходят через модель-аудитор (Fact-Checker), которая удаляет галлюцинации и блокирует консультации по рабочим процессам, если в базе нет подтверждающих документов.
@@ -30,12 +30,18 @@
 ## Возможности
 
 - **Единая база знаний (Unified RAG)** — одна коллекция `smk_docs` вместо изолированных хранилищ; текст + корпоративная память индексируются совместно.
-- **Агентный цикл с Tool Calling** — модель сама решает, какие инструменты вызывать; максимум итераций, системный промпт со строгим алгоритмом из 11 шагов.
+- **Агентный цикл с Tool Calling** — модель сама решает, какие инструменты вызывать; бюджет шагов «поиск/размышление» с ползунком и кнопкой **Стоп** (➤/⏹), детектор зацикливания, итоговая сводка по частичным данным при исчерпании лимита (`_agent_finalize`).
+- **Мультипровайдер основной чат-модели** — OpenRouter / OpenCode Go / CommandCode / любой OpenAI-совместимый («Другой…»); слоты моделей по ролям и прокси на каждого провайдера, каталоги нативных моделей, для гостя — только бесплатные модели. Сервисные пайпы (Vision, эмбеддинги, граф, аудио, rerank) остаются на своих провайдерах.
+- **Комментарии вложений** — комментарии рецензентов из docx/xlsx/.doc/.rtf извлекаются при прикреплении (место · автор · дата · текст, анкоры по диапазонам Word); инструмент `read_file_comments`.
+- **Vision-OCR картинок в docx** — изображения, встроенные в Word-документы, распознаются Vision-моделью (и при индексации, и при прикреплении к чату) с кэшем, бюджетом вызовов и лимитом на файл.
 - **Smart Vision-роутер** — для PDF и изображений: каждая страница маршрутизируется между нативным извлечением текста и Vision-OCR по эвристикам (длина текста, покрытие изображениями, векторная графика). Результаты кэшируются с проверкой `mtime`.
 - **GraphRAG** — граф сущностей и связей с дедупликацией (косинусная дистанция), извлечение отношений через LLM, индексация `.graphml`-схем, SQLite-хранилище.
 - **Deep Audit / Fact-Checker** — второй LLM проверяет черновик ответа: удаляет галлюцинации, блокирует ответы по регламентам при пустом контексте.
 - **Аудио-транскрибация** — Whisper (через OpenRouter), нарезка аудио на чанки с перекрытием (`ffmpeg`/`ffprobe`), запись в `.docx`, голосовой ввод с горячей клавишей.
-- **Синхронизация XWiki** — парсинг корпоративных страниц, скачивание вложений, подмена HTML-тегов на текстовые якоря для RAG.
+- **Синхронизация XWiki** — парсинг корпоративных страниц, скачивание вложений, подмена HTML-тегов на текстовые якоря для RAG. Мультивики (per-target), form-вход, изолированный паук с настраиваемой глубиной, извлечение диаграмм XWiki Diagram, диагностика 404, самолечение битых вложений.
+- **Две кнопки синхронизации + дельта-выгрузка** — быстрая «Синхронизировать базу» (только папки) и полная «Синхронизировать XWiki»; единый guard от одновременного запуска; дельта-выгрузка на сервер через robocopy `/MIR` в staging + снапшот graph_rag.db.
+- **Управление памятью** — окно-редактор `agent_memory.md` с резервными копиями и мгновенной переиндексацией.
+- **UI 2.0** — сайдбар секциями (СЕССИЯ/СИСТЕМА/РЕЖИМЫ) с цветными PNG-иконками, композер мессенджерного типа (авторост поля, счётчик символов, плейсхолдер), диалоговые окна запоминают размер/позицию, md v2 код-карточки в чате, перекраска чата при смене темы Windows без перезапуска, кириллические хоткеи Ctrl+C/X/V/A.
 - **Генерация документов** — по шаблону (`generate_document_from_template`), с нуля (Word `generate_document_from_scratch`, Excel `generate_excel_from_scratch` — многостраничные).
 - **Умная работа с Excel** — семантический поиск по журналу аудитов (`smart_excel_search`), добавление/обновление строк (`smart_excel_edit`), выполнение Python/pandas (`execute_python_code`).
 - **Визуализация** — генерация `yEd GraphML`-схем и `Mermaid` HTML-диаграмм.
@@ -53,7 +59,8 @@
 | GUI | `customtkinter` (обычный `tkinter` не используется) |
 | Векторная база | `chromadb` (коллекция `smk_docs`) |
 | Работа с PDF | `PyMuPDF` (`import fitz`). PyPDF2/pdfplumber запрещены |
-| LLM API | `openai` через OpenRouter; поддержка Vision-моделей |
+| LLM API | `openai` через OpenRouter; поддержка Vision-моделей; мультипровайдер чата (OpenCode Go, CommandCode, Custom) |
+| Rerank | Cohere API (`api.cohere.com/v2/rerank`) или OpenRouter |
 | XML/блок-схемы | `xml.etree.ElementTree` (парсинг `.graphml` / yEd) |
 | Документы | `python-docx` (чтение/генерация Word) |
 | Таблицы | `openpyxl` + `pandas` (анализ больших Excel) |
@@ -79,6 +86,8 @@
 ```
 AI Agent QMS/
 ├── main.py                 # Единственный исходный модуль (агент, UI, инструменты)
+├── assets/                 # Иконки приложения (assets/icons/*.png, agent_icon_3.ico)
+├── docs/                   # DECISIONS, ROADMAP, PLANS (служебное, для сопровождения)
 ├── SMK_Docs/               # База знаний (документы СМК)
 │   ├── .cache/             # Кэш Vision-OCR и парсинга схем (.md)
 │   └── ...                 # РК, СТО, журналы аудитов, схемы, протоколы
@@ -105,12 +114,13 @@ AI Agent QMS/
 
 ## Инструменты агента (Tool Calling)
 
-Схема инструментов формируется динамически в `App.get_tools_schema()` (`main.py:6266`):
+Схема инструментов формируется динамически в `App.get_tools_schema()`:
 
 **Навигация и чтение**
 - `list_available_files` — навигатор по папкам; выдаёт структурированный список файлов по категориям (`audio`, `excel`, `word`, `pdf`, `image`, `text`, `diagram`) и ключевому слову.
 - `read_local_file` — чтение текста из `.docx/.doc/.rtf/.txt/.md/.pdf/.png/.jpg/.jpeg/.xlsx/.xls/.graphml` и аудио с меткой транскрибации; поддерживает чтение директории.
 - `read_attached_file` — чтение файла, прикреплённого к текущему чату.
+- `read_file_comments` — комментарии рецензентов из docx/xlsx/.doc/.rtf (место · автор · дата · текст; NFC-резолв имён).
 - `transcribe_audio_file` — запуск расшифровки аудио в Word-протокол (только после явного согласия).
 
 **Поиск знаний**
@@ -128,7 +138,7 @@ AI Agent QMS/
 - `smart_excel_search` / `smart_excel_edit` — поиск и правка строк в журнале аудитов.
 - `generate_mermaid_diagram` — HTML-диаграмма Mermaid.
 - `generate_yed_diagram` — yEd GraphML-схема (узлы, группы, связи, потоки `material`/`information`).
-- `execute_python_code` — выполнение Python/pandas для анализа больших Excel.
+- `execute_python_code` — выполнение Python/pandas для анализа больших Excel (и обработки больших Word-вложений).
 
 **Коммуникация**
 - `draft_email` — черновик письма в Outlook (корпоративный HTML).
@@ -146,8 +156,8 @@ AI Agent QMS/
 - Эмбеддинги — облачная функция (`OpenAIEmbeddingFunction`), модель задаётся в `global_settings.json` (`embedding_model`).
 - Корпоративная память хранится файлово в `Memory/agent_memory.md` и индексируется в ту же коллекцию (`memorize` дописывает запись с датой, `forget` — удаляет строки и переиндексирует).
 - Поиск возвращает источники через метаданные; ссылки выводятся в формате `[Из файла: ...]`.
-- Опциональный двухступенчатый поиск с **Rerank** (Cohere/OpenRouter) — вкладка «Rerank (Advanced RAG)».
-- Теневая репликация `get_db_path()` стягивает серверную БД на локальный SSD при устаревании `mtime`.
+- Опциональный двухступенчатый поиск с **Rerank** (Cohere напрямую или OpenRouter) — вкладка «Rerank»: актуальный каталог моделей по кнопке «Обновить» (`fetch_rerank_catalog_models`, Cohere — `models?endpoint=rerank` с отбрасыванием deprecated), резервный список при недоступности API, выбранная модель сохраняется.
+- Теневая репликация `get_db_path()` стягивает серверную БД на локальный SSD при устаревании `mtime`; выгрузка у админа — дельтой (`_push_db_to_server`: снапшот `sqlite3.backup` + robocopy `/MIR` в staging + атомарный swap).
 
 ---
 
@@ -157,8 +167,9 @@ AI Agent QMS/
 - Извлечение сущностей и отношений через LLM (`graph_rag_model`), с дедупликацией по косинусной дистанции (`GRAPH_DEDUP_THRESHOLD = 0.30`).
 - Канонические имена эмбеддируются и кэшируются (`_embed_canonical`).
 - Индексация `.graphml`-схем напрямую в граф (`_index_graphml_to_graph`).
-- Запрос структурных связей через `query_knowledge_graph` (иерархия, подчинение, потоки между блоками). Связи выдаются с файлом-источником и дословным фрагментом-подтверждением (при частичном совпадении — с пометкой; без совпадения — голый триплет).
-- Параметры: `graph_rag_enabled`, `graph_rag_model`, `graph_rag_delay`, `graph_rag_window`, `graph_rag_text_cap`, `graph_rag_workers`, `graph_rag_max_fails`.
+- Запрос структурных связей через `query_knowledge_graph` (иерархия, подчинение, потоки между блоками). Рёбра несут дословные цитаты-якоря (`source_verbatim`/`target_verbatim`, 5-полевое извлечение); `_ground_graph_rows` сортирует выдачу по уровню подтверждения (both > partial > none, scheme) до резки `MAX_ROWS`; `_link_graph_entities` дотягивает узлы векторным топ-8 + substring-матчем.
+- Автолечение устаревших якорей (`_graph_autorepair_stale_edges`) — пере-якорение рёбер после переименования/переиндексации файлов.
+- Параметры: `graph_rag_enabled`, `graph_rag_model`, `graph_rag_delay`, `graph_rag_window`, `graph_rag_text_cap`, `graph_rag_workers`, `graph_rag_max_fails`, `graph_rag_autorepair_enabled`, `graph_rag_autorepair_every`, `graph_rag_autorepair_max_files`.
 
 ---
 
@@ -177,6 +188,7 @@ AI Agent QMS/
 - **Fail-fast с паузой**: транзиентные сбои (429/таймаут/5xx) ретраятся один раз с паузой 5 с; 3 подряд одинаковых сбоя в рамках одной синхронизации размыкают цепь (`_VISION_CIRCUIT`) — OCR останавливается до следующего синка, при 403 выполняется диагностика `_check_llm_connectivity()` и выводится сообщение в UI.
 - **Разовая миграционная очистка отравленного кэша**: при первом синке после обновления `_cleanup_poisoned_vision_cache` удаляет `*_vision.md` и XWiki-страницы с маркером `[Ошибка Vision API`, вычищает соответствующие чанки из Chroma и записи из `file_states.json`/`xwiki_states.json` — пострадавшие файлы и страницы перекачиваются заново. Последующие сински чистку пропускают (флаг `.cache/.poison_cleanup_done`).
 - Vision-модель задаётся в `global_settings.json` (`vision_model`).
+- **Vision-OCR картинок в docx** (v2.5.0): `_docx_image_manifest` собирает PNG/JPG из `word/media` по порядку `r:embed`, `_append_docx_vision_blocks` распознаёт их с кэшем `.cache/docx_media/`, sliding-window-бюджетом (`_docvision_allow_call`, 60 вызовов/600 с общих с синком) и лимитом на файл `docx_vision_max_images_per_file` (0 = выкл.); результат — `[!MEDIA]`-блоки в тексте документа (индексация синка + вложения чата).
 
 ---
 
@@ -191,27 +203,31 @@ AI Agent QMS/
 
 ## Интеграция с XWiki
 
-- `sync_xwiki` обходит URL из `global_settings.json` (`xwiki_urls`), парсит HTML (`BeautifulSoup`).
-- `process_xwiki_attachments` скачивает вложения (с проверкой кэша) и подменяет HTML-теги на текстовые якоря `[!MEDIA]` / `[Вложение: ...]` для RAG.
-- Авторизация по логину/паролю из Vault (`xwiki_login`/`xwiki_password`).
+- `sync_xwiki` обходит URL из `global_settings.json` (`xwiki_urls`) и строит **мультивики-конфигурацию**: каждой странице URL собирается по СВОЕЙ вики/хосту (`_xwiki_page_url`), discovery ведёт карту `pages_by_wiki`, паук ходит строго в изоляции текущей вики (чужая — только если она указана прямым target'ом).
+- Авторизация — form-вход по логину/паролю из Vault (`xwiki_login`/`xwiki_password`), guard «получена страница входа», ретраи discovery ×3.
+- `process_xwiki_attachments` скачивает вложения (с проверкой кэша) и подменяет HTML-теги на текстовые якоря `[!MEDIA]` / `[Вложение: ...]` для RAG; битые вложения (HTML-страница входа под видом файла) детектируются (`_is_login_page_content`) и перекачиваются.
+- **Паук с ограничением глубины** (`xwiki_spider_depth`, 0–5; 0 = паук выключен — только discovery-цели): карта `url_depth_map`, кросс-вики переходы разрешены только в target-вики, счётчики отвергнутых.
+- **Диаграммы XWiki Diagram** — `_extract_xwiki_diagrams`: текст value-узлов → `[!ДИАГРАММА]`-маркеры, связи из mxCell-рёбер («Связь: A —[подпись]→ B»), base64-рендеры → inline-картинки.
+- Диагностика 404: `_xwiki_404_suggestions` («Вы искали…») и `_xwiki_404_recycle_info` (кто удалил/когда).
 - Прогресс синхронизации выводится в логи GUI (`update_xwiki_progress`).
 
 ---
 
 ## Роли и безопасность
 
-- Две роли: **guest** и **admin**. Модель подбирается по роли (`guest_model` / `admin_model`).
-- Инструменты `memorize_important_fact` / `forget_fact` доступны только админу.
-- Вкладки настроек «Безопасность», «Аудио и Сеть», «Rerank», «Графы» — только для админа.
-- Ключи хранятся в зашифрованном `secrets.vault` (Fernet, `MASTER_KEY`), с fallback на `.env` (`OPENROUTER_API_KEY`). Чтение — `get_vault_data()`, запись — `save_vault_data()`.
+- Две роли: **guest** и **admin**. Модель подбирается по роли (`guest_model` / `admin_model` или слоты `provider_llm_models`); провайдер чата выбирается по роли (`role_llm_provider`) — гость тоже может сменить провайдера (кроме «Другой…»), для гостя на OpenRouter разрешены только бесплатные модели (`_model_is_free_by_price` + суффикс `:free`).
+- Инструменты `memorize_important_fact` / `forget_fact` и окно «Управление памятью» доступны только админу.
+- Синхронизация (обе кнопки) — в панели обслуживания окна настроек, admin-only, с опциональным паролем `sync_password`.
+- Вкладки настроек «Безопасность», «Аудио/Сеть», «Rerank», «Графы» — только для админа.
+- Ключи хранятся в зашифрованном `secrets.vault` (Fernet, `MASTER_KEY`): `openrouter_key`, `opencode_key`, `commandcode_key`, `custom_llm_key`, `cohere_key`, `tavily_key`, пароли; fallback на `.env` (`OPENROUTER_API_KEY`). Чтение — `get_vault_data()`, запись — `save_vault_data()`.
 - Пароль администратора хранится в Vault (`admin_password`, по умолчанию `admin`).
-- Поддержка прокси (`_proxy_url_from_settings`, `_configure_proxy_env`).
+- Поддержка прокси (`_proxy_url_from_settings`, `_configure_proxy_env`): глобальный SOCKS5 на вкладке «Аудио/Сеть» + per-провайдер чекбокс на вкладке «Модели».
 
 ---
 
 ## Deep Audit (Fact-Checker)
 
-`run_deep_audit` (`main.py:6638`) — проверка черновика ответа второй моделью (`audit_model`):
+`run_deep_audit` — проверка черновика ответа второй моделью (`audit_model`):
 
 - **Пустой контекст:** режим «офицер безопасности» — блокирует ответы по конкретным процессам/регламентам компании, пропускает общие темы.
 - **Есть контекст:** режим «Senior Аудитор» — сверяет факты, удаляет галлюцинации.
@@ -237,14 +253,19 @@ AI Agent QMS/
 | `excel_status_col` / `excel_open_val` / `excel_closed_val` | Логика статусов Excel |
 | `chroma_batch_size` | Размер батча при индексации |
 | `xwiki_urls` / `xwiki_base_rest_url` / `xwiki_spaces` | Источники XWiki |
-| `graph_rag_*` | Параметры GraphRAG |
+| `xwiki_spider_depth` | Глубина паучьей догрузки (0–5; 0 = паук выключен) |
+| `docx_vision_max_images_per_file` | Лимит Vision-картинок docx на файл (0 = выкл.) |
+| `graph_rag_*` | Параметры GraphRAG (включая автолечение `graph_rag_autorepair_*`) |
+| `agent_max_steps` | Бюджет шагов агентного цикла (5–60, дефолт 25; Excel — отдельный лимит) |
+| `llm_provider` / `role_llm_provider` / `provider_llm_models` | Провайдер чата и слоты моделей по провайдерам/ролям |
+| `rerank_*` | Двухступенчатый поиск: провайдер, модель, top-k, порог |
 | `context_window_size` | Размер контекстного окна диалога |
 | `audio_microphone` / `audio_hotkey` | Устройство ввода и горячая клавиша |
 
 ### Вкладки настроек UI
 
-«Модели», «Исключения», «Папки», «О программе», «XWiki», «Настройки Excel» — для всех;
-«Безопасность», «Аудио и Сеть», «Rerank (Advanced RAG)», «Графы (GraphRAG)» — только для админа.
+«Модели» (провайдер, слоты, каталог моделей, ползунок шагов), «Исключения», «Папки», «О прогр.», «XWiki», «Excel» — для всех;
+«Безопасность», «Аудио/Сеть», «Rerank», «Графы» — только для админа. Внизу окна (админ) — панель обслуживания: уровень логов, «Логи», «Диагностика», кнопки синхронизации.
 
 ---
 
@@ -253,7 +274,7 @@ AI Agent QMS/
 1. Установить зависимости Python:
 
    ```
-   pip install customtkinter chromadb pymupdf openai python-dotenv cryptography python-docx openpyxl pandas keyboard sounddevice numpy requests beautifulsoup4 markdownify httpx wikipedia pywin32 openpyxl
+   pip install customtkinter chromadb pymupdf openai python-dotenv cryptography python-docx openpyxl pandas keyboard sounddevice numpy requests beautifulsoup4 markdownify httpx wikipedia pywin32
    ```
 
 2. Указать ключ OpenRouter в `.env`:
