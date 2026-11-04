@@ -5003,8 +5003,8 @@ def search_smk_knowledge_base(query, rerank_params=None):
                     url = "https://openrouter.ai/api/v1/rerank"
                     headers["Authorization"] = f"Bearer {openrouter_key}"
                     payload = {"model": rerank_params["model"], "query": query, "documents": documents, "top_n": 5}
-                else:  # Cohere Direct
-                    url = "https://api.cohere.ai/v1/rerank"
+                else:  # Cohere Direct (канонический эндпоинт v2, D-2026-11-04-03)
+                    url = "https://api.cohere.com/v2/rerank"
                     headers["Authorization"] = f"Bearer {rerank_params.get('cohere_key', '')}"
                     headers["Accept"] = "application/json"
                     payload = {"model": rerank_params["model"], "query": query, "documents": documents, "top_n": 5}
@@ -5067,6 +5067,63 @@ def search_smk_knowledge_base(query, rerank_params=None):
         if "locked" in str(e).lower():
             return "⏳ База знаний СМК сейчас обновляется Администратором. Пожалуйста, подождите 1-2 минуты и повторите запрос.", False
         return f"Ошибка поиска: {str(e)}", False
+
+# Резервные списки моделей Rerank (показываются только при недоступности каталога;
+# в кэш НЕ пишутся — следующий фетч повторяется). D-2026-11-04-03.
+_RERANK_FALLBACK_MODELS = {
+    "OpenRouter": ["cohere/rerank-5-fast", "cohere/rerank-5-pro", "cohere/rerank-4-fast", "cohere/rerank-4-pro", "cohere/rerank-v3.5"],
+    "Cohere": ["rerank-v5.0-pro", "rerank-v5.0-fast", "rerank-v4.0-pro", "rerank-v4.0-fast", "rerank-v3.5", "rerank-multilingual-v3.0"],
+}
+
+def fetch_rerank_catalog_models(choice, cohere_key="", proxies=None):
+    """Получает актуальный каталог rerank-моделей у провайдера (D-2026-11-04-03).
+    choice: "OpenRouter" | "Cohere". Возвращает кортеж (models, error):
+    успех — (список моделей, None); неудача — ([], человекочитаемая русская причина).
+    Хелпер НИКОГДА не бросает исключений; неудачный результат вызывающий код в кэш не
+    пишет, поэтому каждый следующий фетч повторяется. cohere_key читается на лету;
+    proxies=None — прокси строится из local_settings (use_proxy -> socks5h)."""
+    models = []
+    try:
+        if proxies is None:
+            # Прокси из настроек аудиотраскрибации (Cohere/OpenRouter могут быть недоступны напрямую из РФ)
+            ls = load_local_settings()
+            if ls.get("use_proxy", False):
+                proxy_url = f"socks5h://{ls.get('proxy_host', '127.0.0.1')}:{ls.get('proxy_port', '2080')}"
+                proxies = {"http": proxy_url, "https": proxy_url}
+        if choice == "OpenRouter":
+            # Получаем список всех моделей OpenRouter.
+            # Важно: дефолтный эндпоинт отдаёт только текстовые модели, а rerank-модели
+            # имеют output_modalities=['rerank']. Поэтому явно запрашиваем все модальности
+            # через ?output_modalities=all, иначе rerank-модели вообще не вернутся.
+            resp = requests.get("https://openrouter.ai/api/v1/models?output_modalities=all", proxies=proxies, timeout=15)
+            if resp.status_code == 200:
+                data = resp.json().get("data", [])
+                # Фильтруем только те, в ID которых есть слово rerank
+                models = [m["id"] for m in data if "rerank" in m["id"].lower()]
+            else:
+                return [], f"HTTP {resp.status_code}: {resp.text[:200]}"
+        else:
+            # Каталог Cohere: фильтр endpoint=rerank на стороне API (канонический домен api.cohere.com)
+            key = (cohere_key or "").strip()
+            if not key:
+                return [], "ключ Cohere не задан"
+            headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
+            resp = requests.get("https://api.cohere.com/v1/models?endpoint=rerank&page_size=1000", headers=headers, proxies=proxies, timeout=15)
+            if resp.status_code == 200:
+                data = resp.json().get("models", [])
+                # Отбрасываем deprecated; страховочный фильтр: либо эндпоинт rerank, либо rerank в имени
+                models = [m["name"] for m in data
+                          if not m.get("is_deprecated", False)
+                          and ("rerank" in m.get("endpoints", []) or "rerank" in m["name"].lower())]
+            else:
+                return [], f"HTTP {resp.status_code}: {resp.text[:200]}"
+        if not models:
+            return [], "каталог не содержит rerank-моделей"
+        return models, None
+    except requests.exceptions.Timeout:
+        return [], "таймаут запроса (15 с)"
+    except Exception as e:
+        return [], f"{type(e).__name__}: {e}"
 
 def _parse_graph_json(raw, source_text=None):
     """Робастно парсит {"relations": [[s,p,o,(vs),(vo)], ...]} из ответа LLM
@@ -6819,10 +6876,12 @@ def save_global_settings(data):
 # ==================== GUI ПРИЛОЖЕНИЕ ====================
 
 APP_NAME = "ИИ-Агент СМК"
-APP_VERSION = "v2.7.1 Enterprise"
+APP_VERSION = "v2.7.2 Enterprise"
 APP_DEVELOPER = "Плаксунов В.Б."
 APP_PHONE = "2166"
 APP_DESCRIPTION = (
+    "2.7.2 - Rerank: актуальный каталог моделей Cohere (api.cohere.com/v2), ошибки фетча "
+    "видны в GUI, выбор модели больше не затирается.\n"
     "2.7.1 - Исправление деплоя: в exe-версии снова видны цветные иконки и подписи кнопок "
     "(иконки теперь ищутся и внутри _internal, а подписи не пропадают, если иконка недоступна); "
     "логика агента, синхронизации и инструментов не менялась.\n"
@@ -6832,10 +6891,6 @@ APP_DESCRIPTION = (
     "теперь оформлены моноширинной карточкой и больше не искажаются при перерисовке чата, "
     "а при экспорте лога в Word сохраняют шрифт кода; логика агента, синхронизации и "
     "инструментов не менялась.\n"
-    "2.6.0 - Сайдбар перегруппирован по секциям (Сессия / Система / Режимы) с подзаголовком, "
-    "полоской лого и статусом внизу; поле ввода теперь растёт до 6 строк, показывает счётчик "
-    "символов, подсказку \"Спросите что-нибудь…\" и широкий нижний ряд кнопок; логика агента, "
-    "синхронизации и инструментов не менялась.\n"
     "Полная история изменений: docs/DECISIONS.md.\n"
     "\n"
     "Корпоративный ИИ-ассистент для Системы Менеджмента Качества (СМК).\n"
@@ -10477,75 +10532,102 @@ class App(ctk.CTk):
 
             # Кэш для моделей, чтобы не дергать API при каждом клике
             self.rerank_models_cache = getattr(self, "rerank_models_cache", {})
+            # Гейт от двойного фетча; флаг обязан переживать пересоздание окна,
+            # сброс — в finally замыкания завершения фетча
+            self._rerank_fetch_inflight = getattr(self, "_rerank_fetch_inflight", {"OpenRouter": False, "Cohere": False})
+            # Драфты значения модели на каждого провайдера (переживают переключение
+            # провайдера туда-обратно; между окнами персистится настройка rerank_model)
+            self._rerank_model_drafts = {"OpenRouter": "", "Cohere": ""}
+            self._rerank_prev_provider = self.rerank_provider_var.get()
+            _saved_rerank_model = self.current_settings.get("rerank_model", "").strip()
+            if _saved_rerank_model:
+                self._rerank_model_drafts[self._rerank_prev_provider] = _saved_rerank_model
 
             def fetch_models_thread(choice):
-                models = []
-                # Прокси из настроек аудиотраскрибации (Cohere/OpenRouter могут быть недоступны напрямую из РФ)
-                proxies = None
-                ls = load_local_settings()
-                if ls.get("use_proxy", False):
-                    proxy_url = f"socks5h://{ls.get('proxy_host', '127.0.0.1')}:{ls.get('proxy_port', '2080')}"
-                    proxies = {"http": proxy_url, "https": proxy_url}
+                key = ""
                 try:
-                    if choice == "OpenRouter":
-                        # Получаем список всех моделей OpenRouter.
-                        # Важно: дефолтный эндпоинт отдаёт только текстовые модели, а rerank-модели
-                        # имеют output_modalities=['rerank']. Поэтому явно запрашиваем все модальности
-                        # через ?output_modalities=all, иначе rerank-модели вообще не вернутся.
-                        resp = requests.get("https://openrouter.ai/api/v1/models?output_modalities=all", proxies=proxies, timeout=5)
-                        if resp.status_code == 200:
-                            data = resp.json().get("data", [])
-                            # Фильтруем только те, в ID которых есть слово rerank
-                            models = [m["id"] for m in data if "rerank" in m["id"].lower()]
-                    else:
-                        # Получаем список моделей Cohere
-                        key = self.cohere_key_entry.get().strip()
-                        if key:  # Делаем запрос только если ключ уже введён
-                            headers = {"Authorization": f"Bearer {key}", "Accept": "application/json"}
-                            resp = requests.get("https://api.cohere.ai/v1/models", headers=headers, proxies=proxies, timeout=5)
-                            if resp.status_code == 200:
-                                data = resp.json().get("models", [])
-                                # Фильтруем модели: либо в названии есть rerank, либо поддерживают эндпоинт rerank
-                                models = [m["name"] for m in data if "rerank" in m.get("endpoints", []) or "rerank" in m["name"].lower()]
-                except Exception:
-                    pass
+                    key = self.cohere_key_entry.get().strip()
+                except Exception as key_err:
+                    log_ui.warning("Rerank: поле ключа Cohere недоступно (окно настроек закрыто?): %s", key_err)
+                models, err = fetch_rerank_catalog_models(choice, cohere_key=key)
+                if models:
+                    self.rerank_models_cache[choice] = models
+                else:
+                    # Неудачный фетч в кэш НЕ пишется — следующий фетч повторится;
+                    # резервный список используется только для отображения
+                    models = _RERANK_FALLBACK_MODELS[choice]
+                    log_ui.warning("Rerank: каталог %s не получен: %s — показан резервный список", choice, err)
 
-                # Fallback-список, если нет интернета, ошибка API или ключ не введён
-                if not models:
-                    if choice == "OpenRouter":
-                        models = ["cohere/rerank-4-fast", "cohere/rerank-4-pro"]
-                    else:
-                        models = ["rerank-multilingual-v3.0", "rerank-english-v3.0", "rerank-multilingual-v2.0"]
-
-                self.rerank_models_cache[choice] = models
-
-                # Возвращаемся в главный поток для обновления UI
                 def update_ui():
-                    model_combo.configure(state="normal", values=models)
-                    # Если текущая выбранная модель есть в новом списке, сохраняем её. Иначе ставим первую.
-                    if self.rerank_model_var.get() not in models:
-                        self.rerank_model_var.set(models[0] if models else "")
+                    try:
+                        self._rerank_refresh_btn.configure(state="normal")
+                        if self.rerank_provider_var.get() == choice:
+                            model_combo.configure(state="normal", values=models)
+                            if not self.rerank_model_var.get():
+                                self.rerank_model_var.set(models[0])
+                            if err:
+                                self._rerank_status_label.configure(text=f"Каталог не получен: {err} — показан резервный список")
+                            else:
+                                self._rerank_status_label.configure(text=f"Каталог получен: {len(models)} моделей")
+                    except tk.TclError:
+                        pass  # окно настроек уже закрыто — правки не нужны
+                    finally:
+                        self._rerank_fetch_inflight[choice] = False
 
                 self.after(0, update_ui)
 
+            def start_rerank_fetch(choice, force=False):
+                if self._rerank_fetch_inflight.get(choice, False) and not force:
+                    return
+                self._rerank_fetch_inflight[choice] = True
+                threading.Thread(target=fetch_models_thread, args=(choice,), daemon=True).start()
+
             def update_rerank_models(choice):
-                # Если модели уже в кэше — обновляем мгновенно
                 if choice in self.rerank_models_cache:
                     models = self.rerank_models_cache[choice]
                     model_combo.configure(state="normal", values=models)
-                    if self.rerank_model_var.get() not in models:
-                        self.rerank_model_var.set(models[0] if models else "")
+                    if not self.rerank_model_var.get():
+                        self.rerank_model_var.set(models[0])
+                    self._rerank_status_label.configure(text=f"Каталог получен: {len(models)} моделей")
                 else:
-                    # Если в кэше нет — блокируем комбобокс и запускаем фоновый поток
-                    model_combo.set("Загрузка...")
+                    # «Загрузка...» в переменную не пишется — она затирала сохранённую/
+                    # введённую модель; состояние видно по дизейблу и статус-метке
                     model_combo.configure(state="disabled")
-                    threading.Thread(target=fetch_models_thread, args=(choice,), daemon=True).start()
+                    self._rerank_status_label.configure(text="Загрузка каталога…")
+                    start_rerank_fetch(choice)
 
-            ctk.CTkRadioButton(provider_frame, text="OpenRouter", variable=self.rerank_provider_var, value="OpenRouter", command=lambda: update_rerank_models("OpenRouter")).pack(side="left", padx=10)
-            ctk.CTkRadioButton(provider_frame, text="Cohere Direct", variable=self.rerank_provider_var, value="Cohere", command=lambda: update_rerank_models("Cohere")).pack(side="left", padx=10)
+            def refresh_rerank_catalog():
+                choice = self.rerank_provider_var.get()
+                self.rerank_models_cache.pop(choice, None)
+                self._rerank_refresh_btn.configure(state="disabled")
+                model_combo.configure(state="disabled")
+                self._rerank_status_label.configure(text="Загрузка каталога…")
+                start_rerank_fetch(choice, force=True)
 
-            ctk.CTkLabel(tab_rerank, text="Модель Reranker'а:").pack(pady=(10, 0))
-            model_combo.pack(pady=(5, 10))
+            def on_rerank_provider_change():
+                # command радио срабатывает ПОСЛЕ смены переменной, поэтому старый
+                # провайдер берётся из _rerank_prev_provider
+                new_choice = self.rerank_provider_var.get()
+                self._rerank_model_drafts[self._rerank_prev_provider] = self.rerank_model_var.get().strip()
+                draft = self._rerank_model_drafts.get(new_choice, "")
+                if not draft and new_choice in self.rerank_models_cache:
+                    draft = self.rerank_models_cache[new_choice][0]
+                self.rerank_model_var.set(draft)
+                self._rerank_prev_provider = new_choice
+                update_rerank_models(new_choice)
+
+            ctk.CTkRadioButton(provider_frame, text="OpenRouter", variable=self.rerank_provider_var, value="OpenRouter", command=on_rerank_provider_change).pack(side="left", padx=10)
+            ctk.CTkRadioButton(provider_frame, text="Cohere Direct", variable=self.rerank_provider_var, value="Cohere", command=on_rerank_provider_change).pack(side="left", padx=10)
+
+            model_row = ctk.CTkFrame(tab_rerank, fg_color="transparent")
+            model_row.pack(pady=(10, 0))
+            ctk.CTkLabel(model_row, text="Модель Reranker'а:").pack(side="left", padx=(0, 12))
+            self._rerank_refresh_btn = self._icon_button(model_row, "sync_db", "Обновить", refresh_rerank_catalog, width=110)
+            self._rerank_refresh_btn.pack(side="left")
+            model_combo.pack(pady=(5, 2))
+            # Статус-метка причины фетча: «Каталог получен…» / «Каталог не получен: <причина>…» / «Загрузка каталога…»
+            self._rerank_status_label = ctk.CTkLabel(tab_rerank, text="", font=ctk.CTkFont(size=11), text_color=("gray40", "gray60"))
+            self._rerank_status_label.pack(pady=(0, 8))
             update_rerank_models(self.rerank_provider_var.get())  # Инициализация списка
 
             # Ключ Cohere — визуальное размещение поля (сам виджет создан выше по коду)
